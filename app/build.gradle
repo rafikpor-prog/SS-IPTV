@@ -1,0 +1,74 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'pl.rafik.ssiptv'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId 'pl.rafik.ssiptv'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+        resConfigs 'pl', 'en'
+    }
+
+    signingConfigs {
+        if (project.hasProperty('signingStoreFile')
+                && project.hasProperty('signingStorePassword')
+                && project.hasProperty('signingKeyAlias')
+                && project.hasProperty('signingKeyPassword')) {
+            release {
+                storeFile file(project.property('signingStoreFile'))
+                storePassword project.property('signingStorePassword')
+                keyAlias project.property('signingKeyAlias')
+                keyPassword project.property('signingKeyPassword')
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (signingConfigs.findByName('release') != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    // Spójne aktualne wersje zależności przechodnich bibliotek Media3.
+    implementation 'androidx.annotation:annotation:1.8.1'
+    implementation 'androidx.concurrent:concurrent-futures:1.1.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime:2.6.2'
+    implementation 'androidx.profileinstaller:profileinstaller:1.4.0'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+    implementation 'androidx.core:core-ktx:1.13.0'
+    implementation 'androidx.media3:media3-exoplayer:1.8.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.8.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.8.1'
+    implementation 'androidx.media3:media3-ui:1.8.1'
+}

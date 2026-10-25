@@ -18,4 +18,14 @@ public final class PlayerRemoteRulesTest {
     @Test public void vodArrowsDoNotChangeChannel() {
         assertFalse(PlayerRemoteRules.shouldZapWithArrows(true, false, false, false));
     }
+
+    @Test public void channelKeysAndAlternativeRemotesUseSameDirection() {
+        assertEquals(1, PlayerRemoteRules.channelStepForKeyCode(166));
+        assertEquals(-1, PlayerRemoteRules.channelStepForKeyCode(167));
+        assertEquals(1, PlayerRemoteRules.channelStepForKeyCode(92));
+        assertEquals(-1, PlayerRemoteRules.channelStepForKeyCode(93));
+        assertEquals(1, PlayerRemoteRules.channelStepForKeyCode(87));
+        assertEquals(-1, PlayerRemoteRules.channelStepForKeyCode(88));
+        assertEquals(0, PlayerRemoteRules.channelStepForKeyCode(24)); // głośność
+    }
 }

@@ -106,4 +106,23 @@ public final class M3uParserTest {
         assertTrue(parsed.get(1).isEpisode());
         assertEquals("Seriale", parsed.get(1).group);
     }
+
+    @Test public void recognizesProgressiveVodContainersAndKeepsLiveTransportStream() throws Exception {
+        String fixture = "#EXTM3U\n" +
+                "#EXTINF:-1 group-title=Filmy,Film MPEG\n" +
+                "https://example.org/film.mpg\n" +
+                "#EXTINF:-1 group-title=Filmy,Film TS\n" +
+                "https://example.org/movie.ts\n" +
+                "#EXTINF:-1 group-title=Telewizja,Transmisja TS\n" +
+                "https://example.org/live.ts\n" +
+                "#EXTINF:-1 group-title=Inne,Film WEBM\n" +
+                "https://example.org/vod.webm\n";
+        List<Channel> parsed = M3uParser.parse(new ByteArrayInputStream(
+                fixture.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(4, parsed.size());
+        assertTrue(parsed.get(0).isMovie());
+        assertTrue(parsed.get(1).isMovie());
+        assertFalse(parsed.get(2).vod);
+        assertTrue(parsed.get(3).isMovie());
+    }
 }

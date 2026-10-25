@@ -32,13 +32,13 @@ import pl.rafik.ssiptv.data.Channel;
 import pl.rafik.ssiptv.data.ChannelDatabase;
 import pl.rafik.ssiptv.data.SecureSettings;
 
-/** Automatyczny przewodnik XMLTV; cztery źródła i dopasowanie po tvg-id/nazwie. */
+/** Automatyczny przewodnik XMLTV/gzip oraz adres podany przez użytkownika. */
 public final class EpgSync {
     public static final String[] SOURCES = {
-            "https://epg.ovh/pltv.xml",
-            "https://epg.polishteam.one/guide.xml",
-            "https://epg.ovh/pl.xml",
-            "https://epg.ovh/plar.xml"
+            "https://epg.ovh/pl.gz",
+            "https://epg.ovh/plar.gz",
+            "https://epg.ovh/pltv.gz",
+            "https://epg.polishteam.one/guide.xml"
     };
     // Źródło epg.ovh publikuje pięciodniowe przewodniki. Harmonogram programów
     // zapisujemy w SQLite i aktualizujemy tylko po pięciu dniach.
@@ -86,6 +86,7 @@ public final class EpgSync {
     private static String performRefresh(Context context) {
         ChannelDatabase db = new ChannelDatabase(context);
         SecureSettings settings = new SecureSettings(context);
+        List<String> sources = configuredSources(settings);
         settings.saveEpgAttempt(System.currentTimeMillis());
         List<Channel> channels = db.allChannels();
         if (channels.isEmpty()) return "Dodaj kanały, aby dopasować program EPG";
@@ -100,7 +101,7 @@ public final class EpgSync {
         int sourceOk = -1;
         int stored = 0;
         long now = System.currentTimeMillis();
-        for (int i = 0; i < SOURCES.length; i++) {
+        for (int i = 0; i < sources.size(); i++) {
             if (Thread.currentThread().isInterrupted()) break;
             if (sourceOk >= 0) {
                 settings.saveEpgSourceStatus(i, "Pominięto — EPG zapisano ze źródła " + (sourceOk + 1));
@@ -109,8 +110,7 @@ public final class EpgSync {
             settings.saveEpgSourceStatus(i, "Trwa odczyt…");
             try (ChannelDatabase.EpgImport writer = db.beginEpgImport()) {
                 // Oficjalne .gz są nawet 8-10 razy mniejsze niż surowy XMLTV.
-                String url = SOURCES[i].startsWith("https://epg.ovh/") ?
-                        SOURCES[i].replace(".xml", ".gz") : SOURCES[i];
+                String url = sources.get(i);
                 int matched = readXmltv(url, keys, writer, now);
                 if (matched == 0) throw new IOException("Brak dopasowań do listy kanałów");
                 writer.commit();
@@ -128,7 +128,7 @@ public final class EpgSync {
         }
         if (sourceOk >= 0) {
             String status = "EPG offline: " + stored + " audycji • źródło " +
-                    (sourceOk + 1) + "/4 • ponowne pobranie za 5 dni";
+                    (sourceOk + 1) + "/" + sources.size() + " • ponowne pobranie za 5 dni";
             settings.saveEpgStatus(System.currentTimeMillis(), status);
             return status;
         }
@@ -137,6 +137,14 @@ public final class EpgSync {
                 "Źródła EPG niedostępne — program z lokalnej bazy. Próba za 6 godzin";
         settings.saveEpgStatus(0, status);
         return status;
+    }
+
+    /** Statusy odpowiadają kolejności faktycznego sprawdzania źródeł. */
+    public static List<String> configuredSources(SecureSettings settings) {
+        List<String> sources = new ArrayList<>();
+        if (!settings.customEpgUrl().isEmpty()) sources.add(settings.customEpgUrl());
+        java.util.Collections.addAll(sources, SOURCES);
+        return sources;
     }
 
     private static String connectionError(Exception error) {

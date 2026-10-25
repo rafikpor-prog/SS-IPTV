@@ -90,6 +90,30 @@ public final class SecureSettings {
         prefs.edit().putString("active_source", source == null ? "" : source).apply();
     }
 
+    /** Jeden silnik na cały czas odtwarzania. Nie zmieniamy go podczas awarii sieci. */
+    public String playbackEngine() {
+        String value = prefs.getString("playback_engine", "android");
+        return "vlc".equals(value) || "media3".equals(value) ? value : "android";
+    }
+
+    public void setPlaybackEngine(String engine) {
+        if (!"android".equals(engine) && !"media3".equals(engine) && !"vlc".equals(engine))
+            throw new IllegalArgumentException("Nieznany silnik odtwarzania");
+        prefs.edit().putString("playback_engine", engine).apply();
+    }
+
+    public String customEpgUrl() {
+        return prefs.getString("custom_epg_url", "");
+    }
+
+    public void setCustomEpgUrl(String url) {
+        String value = url == null ? "" : url.trim();
+        if (!value.isEmpty() && !(value.startsWith("https://") || value.startsWith("http://")))
+            throw new IllegalArgumentException("Adres EPG musi zaczynać się od https:// lub http://");
+        prefs.edit().putString("custom_epg_url", value).apply();
+        invalidateEpgCache();
+    }
+
     public long lastSync() {
         return prefs.getLong("epg_last_sync", 0);
     }

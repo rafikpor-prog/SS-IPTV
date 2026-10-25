@@ -25,6 +25,7 @@ import android.view.animation.Animation;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.RotateAnimation;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -109,6 +110,7 @@ public final class PlayerActivity extends Activity {
     private int engineSwaps;
     private int startupRetries;
     private boolean retryScheduled;
+    private String selectedEngine = "android";
     private long lastPlaybackEventAt;
     private long lastSamplePosition = -1;
     private long lastSampleTraffic = -1;
@@ -185,18 +187,18 @@ public final class PlayerActivity extends Activity {
                     if (loadingMessage != null && loadingOverlay.getVisibility() == View.VISIBLE)
                         loadingMessage.setText(engineName() +
                                 " · Łączenie z kanałem · " + waitSeconds + " s");
-                    if (waitSeconds >= 11)
-                        recoverPlayback("Przekroczono 11 s oczekiwania na obraz");
+                    if (waitSeconds >= (channel.vod ? 45 : 16))
+                        recoverPlayback("Przekroczono czas oczekiwania na obraz");
                 } else if (firstFrameReady) {
                     sampleQuickProgress(now);
-                    boolean paused = userPaused || channel.vod &&
-                            (usingPlatform && platformView != null && !platformView.isPlaying() ||
-                                    !usingPlatform && player != null && !player.getPlayWhenReady());
-                    if (!paused && now - lastPlaybackEventAt > 7000) {
-                        showLoading("Oczekiwanie na kolejne dane kanału…");
+                    boolean paused = userPaused || channel.vod && !usingPlatform && !usingVlc &&
+                            player != null && !player.getPlayWhenReady();
+                    if (!paused && now - lastPlaybackEventAt > (channel.vod ? 15_000 : 7_000)) {
+                        showLoading(channel.vod ? "Oczekiwanie na dalszą część filmu…" :
+                                "Oczekiwanie na kolejne dane kanału…");
                         setPlaybackStatus("Przerwa w transmisji · wznawianie");
-                        if (now - lastPlaybackEventAt > 18000)
-                            recoverPlayback("Brak postępu wideo przez 18 s");
+                        if (now - lastPlaybackEventAt > (channel.vod ? 45_000 : 18_000))
+                            recoverPlayback("Brak postępu odtwarzania");
                     }
                 }
             }
@@ -322,10 +324,17 @@ public final class PlayerActivity extends Activity {
         }
         String path = stream.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
         adaptiveStream = path.endsWith(".m3u8") || path.endsWith(".mpd");
-        // Preferuj odtwarzacz systemowy Android z dekoderem sprzętowym.
-        // Media3 i VLC pozostają automatycznymi oraz ręcznymi alternatywami.
-        if (hasNativeHardwareDecoder()) startPlatform(stream);
-        else startExo(stream);
+        selectedEngine = new SecureSettings(this).playbackEngine();
+        startSelectedEngine(stream);
+    }
+
+    /** W awarii sieci i buforowania ponawiamy tylko wybrany przez użytkownika silnik. */
+    private void startSelectedEngine(StreamSpec stream) {
+        switch (selectedEngine) {
+            case "vlc": startVlc(stream); break;
+            case "media3": startExo(stream); break;
+            default: startPlatform(stream); break;
+        }
     }
 
     private String engineName() {
@@ -420,10 +429,7 @@ public final class PlayerActivity extends Activity {
         platformView.setOnErrorListener((mp, what, extra) -> {
             if (generation == playGeneration && usingPlatform && !leftScreen) {
                 Log.w("SS-IPTV-Player", "System MediaPlayer error " + what + "/" + extra);
-                setPlaybackStatus("Systemowy dekoder nie obsłużył strumienia · Media3");
-                handler.post(() -> {
-                    if (generation == playGeneration && !leftScreen) startExo(spec);
-                });
+                recoverPlayback("Android: błąd strumienia " + what);
             }
             return true;
         });
@@ -443,7 +449,7 @@ public final class PlayerActivity extends Activity {
             root.requestFocus();
         } catch (Exception | LinkageError error) {
             Log.w("SS-IPTV-Player", "System MediaPlayer unavailable", error);
-            startExo(spec);
+            recoverPlayback("Błąd inicjalizacji Android MediaPlayer");
         }
     }
 
@@ -474,9 +480,9 @@ public final class PlayerActivity extends Activity {
         try {
             if (libVlc == null) {
                 ArrayList<String> options = new ArrayList<>();
-                options.add("--network-caching=1800");
+                options.add("--network-caching=" + (channel.vod ? 4500 : 1800));
                 options.add("--live-caching=1800");
-                options.add("--file-caching=1200");
+                options.add("--file-caching=" + (channel.vod ? 3500 : 1200));
                 libVlc = new LibVLC(getApplicationContext(), options);
                 libVlc.setUserAgent("SS-IPTV/1.7 (Android TV)", "SS-IPTV/1.7");
             }
@@ -488,13 +494,14 @@ public final class PlayerActivity extends Activity {
                 vlcPlayer.stop();
             }
             org.videolan.libvlc.MediaPlayer nativePlayer = vlcPlayer;
+            final boolean[] resumedVod = {false};
             // Zawsze pokazujemy cały kadr: bez crop, rozciągania i zoomu.
             nativePlayer.setScale(0f);
             nativePlayer.setAspectRatio(null);
             Media media = new Media(libVlc, Uri.parse(spec.url));
             media.setHWDecoderEnabled(true, false);
             // Krótki bufor ogranicza RAM i opóźnienia przy zappingu na Android Box.
-            media.addOption(":network-caching=1800");
+            media.addOption(":network-caching=" + (channel.vod ? 4500 : 1800));
             media.addOption(":live-caching=1800");
             media.addOption(":http-reconnect=true");
             for (Map.Entry<String, String> entry : spec.headers.entrySet()) {
@@ -516,6 +523,10 @@ public final class PlayerActivity extends Activity {
                 long now = SystemClock.elapsedRealtime();
                 switch (type) {
                     case org.videolan.libvlc.MediaPlayer.Event.Playing:
+                        if (channel.vod && !resumedVod[0]) {
+                            resumedVod[0] = true;
+                            if (channel.playbackMs > 0) nativePlayer.setTime(channel.playbackMs);
+                        }
                         watchdog.heartbeat(now);
                         showVlcQuality(nativePlayer);
                         if (hasVlcVideoOutput) markFirstFrameReady("VLC");
@@ -548,7 +559,8 @@ public final class PlayerActivity extends Activity {
                         recoverPlayback("VLC zgłosił błąd strumienia");
                         break;
                     case org.videolan.libvlc.MediaPlayer.Event.EndReached:
-                        recoverPlayback("Strumień TV został zakończony");
+                        if (channel.vod) finishVodPlayback();
+                        else recoverPlayback("Strumień TV został zakończony");
                         break;
                     default: break;
                 }
@@ -559,8 +571,8 @@ public final class PlayerActivity extends Activity {
             nativePlayer.play();
             root.requestFocus();
         } catch (Exception | LinkageError error) {
-            Log.w("SS-IPTV-Player", "VLC unavailable, switching engine", error);
-            startExo(spec);
+            Log.w("SS-IPTV-Player", "VLC unavailable", error);
+            recoverPlayback("Błąd uruchamiania VLC");
         }
     }
 
@@ -657,19 +669,8 @@ public final class PlayerActivity extends Activity {
                         audioWarning.setVisibility(audioFound && !audioSupported ?
                                 View.VISIBLE : View.GONE);
                     }
-                    if (audioFound && !audioSupported && !channel.vod) {
-                        // Obraz może się dekodować, ale TV byłby niemy. VLC
-                        // ma dodatkowe demultipleksery i kodeki programowe.
-                        handler.postDelayed(() -> {
-                            if (generation != playGeneration || usingVlc || leftScreen) return;
-                            try {
-                                engineSwaps++;
-                                startVlc(resolveStream());
-                            } catch (Exception error) {
-                                setPlaybackStatus("Dźwięk: nie znaleziono obsługiwanego kodeka");
-                            }
-                        }, 900);
-                    }
+                    // Kodek audio nie jest dostępny: pokaż ostrzeżenie, ale nie
+                    // przełączaj odtwarzacza bez decyzji użytkownika.
                 }
                 @Override public void onPlaybackStateChanged(int state) {
                     if (generation != playGeneration) return;
@@ -682,8 +683,10 @@ public final class PlayerActivity extends Activity {
                         else showLoading("Media3 · Wznawianie strumienia");
                         setPlaybackStatus("Media3 · Oczekiwanie na dane");
                     }
-                    if (state == Player.STATE_ENDED && channel.vod && channel.id > 0)
-                        storage.execute(() -> database.savePlayback(channel.id, 0, 0));
+                    if (state == Player.STATE_ENDED) {
+                        if (channel.vod) finishVodPlayback();
+                        else recoverPlayback("Zakończył się strumień TV");
+                    }
                 }
                 @Override public void onPlayerError(PlaybackException error) {
                     if (generation != playGeneration) return;
@@ -775,9 +778,8 @@ public final class PlayerActivity extends Activity {
                 setPlaybackStatus("Media3 · Automatyczna najwyższa jakość");
             }
         }
-        boolean paused = userPaused || leftScreen || channel.vod &&
-                (usingPlatform && platformView != null && !platformView.isPlaying() ||
-                        !usingPlatform && player != null && !player.getPlayWhenReady());
+        boolean paused = userPaused || leftScreen || channel.vod && !usingPlatform && !usingVlc &&
+                player != null && !player.getPlayWhenReady();
         if (watchdog.isStalled(now, network.connected, paused))
             recoverPlayback("Brak postępu odtwarzania przez 60 s");
     }
@@ -807,88 +809,51 @@ public final class PlayerActivity extends Activity {
 
     private void recoverPlayback(String reason) {
         if (leftScreen || isFinishing() || isDestroyed() || retryScheduled) return;
-        if (!NetworkIndicator.read(this).connected) {
-            showLoading("Brak połączenia z siecią · czekam na wznowienie");
-            setPlaybackStatus("Brak sieci");
-            retryScheduled = true;
-            long generation = playGeneration;
-            handler.postDelayed(() -> {
-                if (generation != playGeneration || leftScreen) return;
-                retryScheduled = false;
-                if (NetworkIndicator.read(this).connected) {
-                    try { if (usingPlatform) startPlatform(resolveStream());
-                        else startExo(resolveStream()); }
-                    catch (Exception error) { setPlaybackStatus("Błąd adresu kanału"); }
-                }
-            }, 10000);
-            return;
-        }
         Log.w("SS-IPTV-Player", reason + " | engine=" + engineName());
-        StreamSpec spec;
-        try { spec = resolveStream(); }
-        catch (Exception error) {
-            setPlaybackStatus("Nieprawidłowy adres strumienia");
-            return;
-        }
+        boolean networkAvailable = NetworkIndicator.read(this).connected;
+        if (channel.vod) rememberVodPosition();
         showOsd();
-        if (!firstFrameReady) {
-            if (engineSwaps < (hasNativeHardwareDecoder() ? 2 : 1)) {
-                engineSwaps++;
-                // Jeśli pierwszy dekoder nie dał obrazu w 11 s, nie czekamy minutę.
-                // Wypróbuj inny demultiplekser i inną ścieżkę sprzętową.
-                setPlaybackStatus("Zmiana silnika odtwarzania");
-                if (usingPlatform) startExo(spec);
-                else if (usingVlc) startExo(spec);
-                else startVlc(spec);
-            } else if (startupRetries++ < 1) {
-                showLoading("Ponawiam połączenie · " + reason);
-                if (usingPlatform) startExo(spec);
-                else if (usingVlc) startVlc(spec);
-                else startExo(spec);
-            } else {
-                retryScheduled = true;
-                setPlaybackStatus("Brak obrazu · ponowna próba za 15 s");
-                showLoading("Nie udało się uruchomić kanału. Kolejna próba za 15 sekund.");
-                long generation = playGeneration;
-                handler.postDelayed(() -> {
-                    if (generation != playGeneration || leftScreen) return;
-                    retryScheduled = false;
-                    startupRetries = 0;
-                    engineSwaps = 0;
-                    if (hasNativeHardwareDecoder()) startPlatform(spec);
-                    else startExo(spec);
-                }, 15000);
-            }
-            return;
+        // Przy HLS/DASH ogranicz bitrate w działającym Media3, bez przełączania
+        // dekodera. Inne formaty nie mają wariantów jakości po stronie klienta.
+        if (!usingPlatform && !usingVlc && adaptiveStream && qualityCap > 1_000_000) {
+            qualityCap = qualityCap == Integer.MAX_VALUE ? 4_000_000 :
+                    Math.max(1_000_000, qualityCap / 2);
+            applyQualityCap();
         }
+        retryScheduled = true;
+        int delaySeconds = networkAvailable ? Math.min(20, 2 << Math.min(startupRetries, 4)) : 10;
+        startupRetries++;
+        String status = networkAvailable ? "Ponawianie za " + delaySeconds + " s · " +
+                engineName() : "Brak sieci · sprawdzę ponownie za 10 s";
+        showLoading(status);
+        setPlaybackStatus(status);
+        long generation = playGeneration;
+        handler.postDelayed(() -> {
+            if (generation != playGeneration || leftScreen || isFinishing()) return;
+            retryScheduled = false;
+            if (!NetworkIndicator.read(this).connected) {
+                recoverPlayback("Sieć nadal niedostępna");
+                return;
+            }
+            try { startSelectedEngine(resolveStream()); }
+            catch (Exception error) { recoverPlayback("Błędny adres strumienia"); }
+        }, delaySeconds * 1000L);
+    }
 
-        // Odtwarzanie rzeczywiście wystartowało, lecz później strumień stanął.
-        // Najpierw lekki restart tej samej instancji, potem dopiero drugi silnik.
-        if (usingPlatform) {
-            setPlaybackStatus("Android · przełączam na Media3");
-            startExo(spec);
-        } else if (usingVlc) {
-            if (vlcRecoveryAttempts++ < 1) {
-                setPlaybackStatus("VLC · Wznawiam transmisję");
-                startVlc(spec);
-            } else {
-                setPlaybackStatus("Przełączam dekoder na Media3");
-                startExo(spec);
-            }
-        } else {
-            if (adaptiveStream && qualityCap > 1_000_000) {
-                qualityCap = qualityCap == Integer.MAX_VALUE ? 4_000_000 :
-                        Math.max(1_000_000, qualityCap / 2);
-                applyQualityCap();
-            }
-            if (exoRecoveryAttempts++ < 1) {
-                setPlaybackStatus("Media3 · Wznawiam transmisję");
-                startExo(spec);
-            } else {
-                setPlaybackStatus("Zmiana dekodera na VLC");
-                startVlc(spec);
-            }
-        }
+    private void rememberVodPosition() {
+        long position = usingPlatform && platformView != null ? platformView.getCurrentPosition() :
+                usingVlc && vlcPlayer != null ? vlcPlayer.getTime() :
+                player != null ? player.getCurrentPosition() : -1;
+        if (position > 0 && position != C.TIME_UNSET) channel.playbackMs = position;
+    }
+
+    private void finishVodPlayback() {
+        if (!channel.vod) return;
+        channel.playbackMs = 0;
+        if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
+        if (channel.id > 0) storage.execute(() -> database.savePlayback(channel.id, 0, 0));
+        setPlaybackStatus("Koniec materiału · wybierz kolejny film lub odcinek");
+        showOsd();
     }
 
     private void applyQualityCap() {
@@ -961,6 +926,7 @@ public final class PlayerActivity extends Activity {
                 loadingOverlay.getVisibility() == View.VISIBLE;
         if (!firstReady && !overlayWasVisible) return;
         firstFrameReady = true;
+        startupRetries = 0;
         lastPlaybackEventAt = SystemClock.elapsedRealtime();
         watchdog.heartbeat(lastPlaybackEventAt);
         if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
@@ -1074,13 +1040,27 @@ public final class PlayerActivity extends Activity {
         TextView instruction = Ui.text(this,
                 channel.vod ? "OK: sterowanie OSD   |   Pauza i przewijanie" :
                         "Góra/dół: kanały   |   Lewo/OK: sterowanie OSD", 10, Ui.MUTED, false);
-        actionsLine.addView(instruction, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!channel.vod)
+            actionsLine.addView(instruction, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout actions = Ui.row(this);
+        if (channel.vod) {
+            addColorAction(actions, "−30s", R.drawable.ic_nav_history, Ui.SECONDARY,
+                    v -> seekVod(-30_000));
+            addColorAction(actions, "Pauza/Play", R.drawable.ic_player_play, Ui.ACCENT,
+                    v -> toggleVodPause());
+            addColorAction(actions, "+30s", R.drawable.ic_nav_history, Ui.SECONDARY,
+                    v -> seekVod(30_000));
+        }
         firstOsdAction = addColorAction(actions, "Ulubione", R.drawable.ic_nav_heart, 0xFFDD5165, v -> toggleFavorite());
         addColorAction(actions, "OSD", R.drawable.ic_player_info, 0xFF35AD83, v -> toggleOsd());
         addColorAction(actions, "Opis", R.drawable.ic_nav_epg, 0xFFE2B456, v -> toggleDescription());
         addColorAction(actions, "Ustawienia", R.drawable.ic_nav_settings, 0xFF5792D4, v -> toggleSettings());
-        actionsLine.addView(actions);
+        if (channel.vod) {
+            HorizontalScrollView scrollActions = new HorizontalScrollView(this);
+            scrollActions.setHorizontalScrollBarEnabled(false);
+            scrollActions.addView(actions);
+            actionsLine.addView(scrollActions, new LinearLayout.LayoutParams(-1, -2));
+        } else actionsLine.addView(actions);
         osd.addView(actionsLine);
 
         FrameLayout.LayoutParams osdParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
@@ -1272,20 +1252,21 @@ public final class PlayerActivity extends Activity {
                 12, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 12));
         SecureSettings settings = new SecureSettings(this);
         settingsBody.addView(Ui.text(this, settings.epgStatus(), 12, Ui.ACCENT, false));
-        settingsBody.addView(Ui.text(this, "Odtwarzacz: " +
+        settingsBody.addView(Ui.text(this, "Wybrany odtwarzacz: " +
                         (usingPlatform ? "Android / systemowy MediaPlayer" :
                                 usingVlc ? "VLC / VideoLAN" : "Media3 / ExoPlayer"),
                 12, Ui.SECONDARY, true), Ui.margins(this, -1, -2, 0, 12, 0, 5));
-        settingsBody.addView(Ui.button(this, "Zmień silnik: Android / Media3 / VLC", false,
-                v -> {
-                    StreamSpec spec;
-                    try { spec = resolveStream(); }
-                    catch (Exception error) { return; }
-                    if (usingPlatform) startExo(spec);
-                    else if (usingVlc) startPlatform(spec);
-                    else startVlc(spec);
-                    toggleSettings();
-                }), Ui.margins(this, -1, -2, 0, 5, 0, 5));
+        for (String engine : new String[]{"android", "media3", "vlc"}) {
+            String label = "android".equals(engine) ? "Systemowy Android" :
+                    "media3".equals(engine) ? "Media3 / ExoPlayer" : "VLC / VideoLAN";
+            settingsBody.addView(Ui.button(this,
+                    (engine.equals(settings.playbackEngine()) ? "Aktywny: " : "Wybierz: ") + label,
+                    engine.equals(settings.playbackEngine()), v -> {
+                        settings.setPlaybackEngine(engine);
+                        toggleSettings();
+                        if (!engine.equals(selectedEngine)) startPlayback();
+                    }), Ui.margins(this, -1, -2, 0, 4, 0, 4));
+        }
         settingsBody.addView(Ui.button(this, "Wybierz ścieżkę dźwięku", false,
                 v -> showAudioTracks()), Ui.margins(this, -1, -2, 0, 9, 0, 5));
         String active = settings.activeSource();
@@ -1404,6 +1385,7 @@ public final class PlayerActivity extends Activity {
         descriptionOpen = false;
         if (descriptionScroll != null) descriptionScroll.setVisibility(View.GONE);
         channel = target;
+        ++playGeneration; // Odrzuć zaplanowane ponowienia poprzedniego kanału.
         numberInput.setLength(0);
         numberOverlay.setVisibility(View.GONE);
         updateChannelOsd();
@@ -1458,6 +1440,8 @@ public final class PlayerActivity extends Activity {
     }
 
     private boolean handleRemoteKey(int keyCode) {
+        int channelStep = PlayerRemoteRules.channelStepForKeyCode(keyCode);
+        if (channelStep != 0 && !channel.vod) { zap(channelStep); return true; }
         if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
             typeDigit(keyCode - KeyEvent.KEYCODE_0);
             return true;
@@ -1473,8 +1457,6 @@ public final class PlayerActivity extends Activity {
             case KeyEvent.KEYCODE_PROG_BLUE:
             case KeyEvent.KEYCODE_MENU: toggleSettings(); return true;
             case KeyEvent.KEYCODE_INFO: toggleOsd(); return true;
-            case KeyEvent.KEYCODE_CHANNEL_UP: zap(1); return true;
-            case KeyEvent.KEYCODE_CHANNEL_DOWN: zap(-1); return true;
             case KeyEvent.KEYCODE_DPAD_UP:
                 if (PlayerRemoteRules.shouldZapWithArrows(channel.vod, settingsPanel != null,
                         osdNavigationMode, descriptionOpen)) { zap(1); return true; }
@@ -1487,18 +1469,55 @@ public final class PlayerActivity extends Activity {
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
                 if (numberInput.length() > 0) { commitChannelNumber(); return true; }
-                if (!osdNavigationMode && settingsPanel == null && !channel.vod) {
+                if (!osdNavigationMode && settingsPanel == null) {
                     enterOsdNavigation(); return true;
                 }
                 return false;
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 if (!osdNavigationMode && settingsPanel == null) {
+                    if (channel.vod) {
+                        seekVod(keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -30_000 : 30_000);
+                        return true;
+                    }
                     enterOsdNavigation(); return true;
                 }
                 return false;
             default: return false;
         }
+    }
+
+    private void seekVod(long offsetMs) {
+        if (!channel.vod) return;
+        long position = usingPlatform ? platformView.getCurrentPosition() :
+                usingVlc && vlcPlayer != null ? vlcPlayer.getTime() :
+                player != null ? player.getCurrentPosition() : 0;
+        long duration = usingPlatform ? platformView.getDuration() :
+                usingVlc && vlcPlayer != null ? vlcPlayer.getLength() :
+                player != null ? player.getDuration() : -1;
+        long target = Math.max(0, position + offsetMs);
+        if (duration > 0) target = Math.min(target, Math.max(0, duration - 1000));
+        if (usingPlatform) platformView.seekTo((int) Math.min(Integer.MAX_VALUE, target));
+        else if (usingVlc && vlcPlayer != null) vlcPlayer.setTime(target);
+        else if (player != null) player.seekTo(target);
+        channel.playbackMs = target;
+        showOsd();
+    }
+
+    private void toggleVodPause() {
+        if (!channel.vod) return;
+        boolean playing = usingPlatform ? platformView.isPlaying() :
+                usingVlc && vlcPlayer != null ? vlcPlayer.isPlaying() :
+                player != null && player.getPlayWhenReady();
+        userPaused = playing;
+        if (usingPlatform) {
+            if (playing) platformView.pause(); else platformView.start();
+        } else if (usingVlc && vlcPlayer != null) {
+            if (playing) vlcPlayer.pause(); else vlcPlayer.play();
+        } else if (player != null) {
+            if (playing) player.pause(); else player.play();
+        }
+        showOsd();
     }
 
     @Override public void onBackPressed() {

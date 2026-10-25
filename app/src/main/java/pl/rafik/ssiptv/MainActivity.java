@@ -420,6 +420,29 @@ public final class MainActivity extends Activity {
                     0, 0, 0, compactTv ? 4 : 12));
             updateChips();
         }
+        if ("Telewizja".equals(tab)) {
+            LinearLayout filters = Ui.row(this);
+            TextView categoriesButton = Ui.text(this,
+                    "KATEGORIE  /  " + selectedGroup + "  ▾", 13, Ui.ACCENT, true);
+            categoriesButton.setGravity(Gravity.CENTER_VERTICAL);
+            categoriesButton.setPadding(Ui.dp(this, 13), 0, Ui.dp(this, 13), 0);
+            categoriesButton.setBackground(Ui.rounded(this, Ui.SURFACE, 11));
+            categoriesButton.setOnClickListener(v -> {
+                openTvDrawer();
+                tvCategoryDrawerMode = true;
+                populateTvDrawer();
+            });
+            Ui.tvFocus(categoriesButton);
+            filters.addView(categoriesButton, Ui.margins(this, -2, 42, 0, 0, 9, 0));
+
+            HorizontalScrollView categories = new HorizontalScrollView(this);
+            categories.setHorizontalScrollBarEnabled(false);
+            chips = Ui.row(this);
+            categories.addView(chips);
+            filters.addView(categories, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1));
+            content.addView(filters, Ui.margins(this, -1, 42, 0, 0, 0, compactTv ? 4 : 9));
+            updateChips();
+        }
         LinearLayout titleRow = Ui.row(this);
         String heading = "Telewizja".equals(tab) ? "TELEWIZJA" :
                 "VOD".equals(tab) ? "FILMY VOD" :
@@ -430,15 +453,32 @@ public final class MainActivity extends Activity {
         tvCount = Ui.text(this, "", 14, Ui.ACCENT, true);
         tvCount.setPadding(Ui.dp(this, 20), 0, 0, 0);
         titleRow.addView(tvCount, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView hint = Ui.text(this, isMediaTab() ?
-                "OK  Szczegóły     •     ←  Menu" :
-                "←  Menu i kategorie     •     OK  Odtwórz", 12,
-                Ui.SECONDARY, false);
-        titleRow.addView(hint);
+        if ("Telewizja".equals(tab)) {
+            TextView listToggle = tvModeToggle("Lista", !isTiled(), () -> setTiled(false));
+            TextView gridToggle = tvModeToggle("Kafelki", isTiled(), () -> setTiled(true));
+            titleRow.addView(listToggle, Ui.margins(this, -2, 37, 0, 0, 6, 0));
+            titleRow.addView(gridToggle, Ui.margins(this, -2, 37, 0, 0, 0, 0));
+        } else {
+            TextView hint = Ui.text(this, isMediaTab() ?
+                    "OK  Szczegóły     •     ←  Menu" :
+                    "←  Menu i kategorie     •     OK  Odtwórz", 12,
+                    Ui.SECONDARY, false);
+            titleRow.addView(hint);
+        }
         content.addView(titleRow, Ui.margins(this, -1, compactTv ? 44 : 62, 0, 0, 0, 5));
         resultsFrame = new FrameLayout(this);
         content.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();
+    }
+
+    private TextView tvModeToggle(String label, boolean selected, Runnable action) {
+        TextView toggle = Ui.text(this, label, 12, selected ? Ui.BG : Ui.WHITE, selected);
+        toggle.setGravity(Gravity.CENTER);
+        toggle.setPadding(Ui.dp(this, 15), 0, Ui.dp(this, 15), 0);
+        toggle.setBackground(Ui.rounded(this, selected ? Ui.ACCENT : Ui.SURFACE, 10));
+        toggle.setOnClickListener(v -> action.run());
+        Ui.tvFocus(toggle);
+        return toggle;
     }
 
     private void openTvDrawer() {
@@ -526,6 +566,8 @@ public final class MainActivity extends Activity {
                         isTiled(), () -> setTiled(true)),
                         Ui.margins(this, -1, 46, 0, 1, 0, 1));
             }
+            items.addView(tvDrawerItem("Wyjdź z aplikacji", R.drawable.ic_nav_menu,
+                    false, this::exitApp), Ui.margins(this, -1, 48, 0, 16, 0, 0));
         }
         if (initialFocus != null) initialFocus.requestFocus();
     }
@@ -617,6 +659,11 @@ public final class MainActivity extends Activity {
         settings.setOnClickListener(v -> showTab("Ustawienia"));
         Ui.tvFocus(settings);
         bar.addView(settings, Ui.margins(this, 42, 46, 7, 0, 0, 0));
+        TextView exit = Ui.text(this, "Wyjdź", 12, Ui.SECONDARY, true);
+        exit.setGravity(Gravity.CENTER);
+        exit.setOnClickListener(v -> exitApp());
+        Ui.tvFocus(exit);
+        bar.addView(exit, Ui.margins(this, 64, 46, 5, 0, 0, 0));
         return bar;
     }
 
@@ -1004,7 +1051,7 @@ public final class MainActivity extends Activity {
         summary.addView(Ui.text(this, "Ostatnio: " + date + " • zapisane w urządzeniu • co 5 dni",
                 12, Ui.SECONDARY, false));
         summary.addView(Ui.button(this, "Synchronizuj EPG teraz", true, v ->
-                performTask("Sprawdzanie czterech źródeł EPG…",
+                performTask("Sprawdzanie źródeł EPG…",
                         () -> EpgSync.refresh(getApplicationContext()), false)),
                 Ui.margins(this, -1, -2, 0, 16, 0, 0));
         page.addView(summary, Ui.margins(this, -1, -2, 0, 0, 0, 20));
@@ -1052,7 +1099,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.7.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.8.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1076,6 +1123,24 @@ public final class MainActivity extends Activity {
             showTab("Telewizja");
         }));
         page.addView(screenCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
+
+        LinearLayout playerCard = card();
+        playerCard.addView(Ui.text(this, "Domyślny odtwarzacz", 19, Ui.WHITE, true));
+        playerCard.addView(Ui.text(this,
+                "Jedna wybrana technologia obsługuje TV i VOD. Przy utracie połączenia " +
+                "aplikacja ponawia próbę tylko w tym silniku — bez automatycznego przełączania.",
+                13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 12));
+        for (String engine : new String[]{"android", "media3", "vlc"}) {
+            String label = "android".equals(engine) ? "Android / systemowy" :
+                    "media3".equals(engine) ? "Media3 / ExoPlayer" : "VLC / VideoLAN";
+            boolean current = engine.equals(secure.playbackEngine());
+            playerCard.addView(Ui.button(this, (current ? "Aktywny: " : "Wybierz: ") + label,
+                    current, v -> {
+                        secure.setPlaybackEngine(engine);
+                        showTab("Ustawienia");
+                    }), Ui.margins(this, -1, -2, 0, 0, 0, 6));
+        }
+        page.addView(playerCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout playlistsCard = card();
         playlistsCard.addView(Ui.text(this, "Aktywna lista kanałów", 19, Ui.WHITE, true));
@@ -1128,8 +1193,27 @@ public final class MainActivity extends Activity {
         epgCard.addView(Ui.text(this, "EPG • status źródeł", 19, Ui.WHITE, true));
         epgCard.addView(Ui.text(this, secure.epgStatus(), 13, Ui.ACCENT, false),
                 Ui.margins(this, -1, -2, 0, 7, 0, 12));
-        for (int i = 0; i < EpgSync.SOURCES.length; i++) {
-            epgCard.addView(Ui.text(this, EpgSync.SOURCES[i], 11, Ui.SECONDARY, false));
+        EditText customEpg = input("https://twoj-serwer.pl/epg.xml.gz", false);
+        customEpg.setSingleLine(true);
+        customEpg.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        customEpg.setText(secure.customEpgUrl());
+        epgCard.addView(Ui.text(this, "Własny adres XMLTV / XMLTV.GZ", 13, Ui.WHITE, true),
+                Ui.margins(this, -1, -2, 0, 7, 0, 3));
+        epgCard.addView(customEpg, Ui.margins(this, -1, 48, 0, 0, 0, 7));
+        epgCard.addView(Ui.button(this, "Zapisz adres EPG", false, v -> {
+            try {
+                secure.setCustomEpgUrl(customEpg.getText().toString());
+                Toast.makeText(this, "Zapisano EPG. Rozpocznę synchronizację w tle.",
+                        Toast.LENGTH_LONG).show();
+                EpgSync.refreshIfStale(getApplicationContext());
+                showTab("Ustawienia");
+            } catch (IllegalArgumentException error) {
+                customEpg.setError(error.getMessage());
+            }
+        }), Ui.margins(this, -1, -2, 0, 0, 0, 12));
+        java.util.List<String> epgUrls = EpgSync.configuredSources(secure);
+        for (int i = 0; i < epgUrls.size(); i++) {
+            epgCard.addView(Ui.text(this, epgUrls.get(i), 11, Ui.SECONDARY, false));
             epgCard.addView(Ui.text(this, secure.epgSourceStatus(i), 12, Ui.WHITE, true),
                     Ui.margins(this, -1, -2, 0, 2, 0, 9));
         }
@@ -1146,6 +1230,8 @@ public final class MainActivity extends Activity {
                 v -> showTab("Źródła")), Ui.margins(this, -1, -2, 0, 12, 0, 12));
         actions.addView(Ui.text(this, "Każdą listę możesz usunąć osobno w sekcji «Aktywna lista kanałów».",
                 12, Ui.SECONDARY, false));
+        actions.addView(Ui.button(this, "Wyjdź z SS-IPTV", false, v -> exitApp()),
+                Ui.margins(this, -1, -2, 0, 12, 0, 0));
         page.addView(actions);
 
         page.addView(Ui.text(this, "Wskazówka: korzystaj z legalnie udostępnionych " +
@@ -1252,6 +1338,10 @@ public final class MainActivity extends Activity {
     }
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE && event.getRepeatCount() == 0) {
+            exitApp();
+            return true;
+        }
         if (tvMode && event.getRepeatCount() == 0) {
             if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO) {
                 if (tvDrawer != null && tvDrawer.getVisibility() == View.VISIBLE)
@@ -1305,6 +1395,13 @@ public final class MainActivity extends Activity {
         } else if (tvMode && !"Telewizja".equals(tab)) {
             showTab("Telewizja");
         } else super.onBackPressed();
+    }
+
+    /** Zamyka cały stos aktywności i usuwa zadanie z ostatnich aplikacji.
+     * Następne uruchomienie przechodzi ponownie przez onCreate i czyta lokalny katalog. */
+    private void exitApp() {
+        uiHandler.removeCallbacks(guideDisplayTick);
+        finishAndRemoveTask();
     }
 
     private void confirmDelete(String title, Runnable operation) {

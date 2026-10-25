@@ -91,7 +91,11 @@ public final class M3uParser {
                         } else if (category.contains("vod") || category.contains("film") ||
                                 category.contains("movie") || category.contains("kino") ||
                                 streamPath.endsWith(".mp4") || streamPath.endsWith(".mkv") ||
-                                streamPath.endsWith(".avi")) channel.asVod();
+                                streamPath.endsWith(".avi") || streamPath.endsWith(".mpeg") ||
+                                streamPath.endsWith(".mpg") || streamPath.endsWith(".mpeg4") ||
+                                streamPath.endsWith(".m4v") || streamPath.endsWith(".mov") ||
+                                streamPath.endsWith(".webm") || streamPath.endsWith(".wmv") ||
+                                streamPath.endsWith(".flv")) channel.asVod();
                         result.add(channel);
                         if (result.size() >= MAX_CHANNELS) {
                             throw new IOException("Lista przekracza limit " + MAX_CHANNELS + " kanałów.");

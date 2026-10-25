@@ -4,6 +4,22 @@ package pl.rafik.ssiptv;
 public final class PlayerRemoteRules {
     private PlayerRemoteRules() {}
 
+    /** Android TV: CH+/CH- = 166/167; część boxów wysyła PageUp/PageDown
+     * albo MediaNext/MediaPrevious. W VOD te klawisze zostają dla nawigacji filmu. */
+    public static int channelStepForKeyCode(int keyCode) {
+        switch (keyCode) {
+            case 166: // KEYCODE_CHANNEL_UP
+            case 92:  // KEYCODE_PAGE_UP
+            case 87:  // KEYCODE_MEDIA_NEXT
+                return 1;
+            case 167: // KEYCODE_CHANNEL_DOWN
+            case 93:  // KEYCODE_PAGE_DOWN
+            case 88:  // KEYCODE_MEDIA_PREVIOUS
+                return -1;
+            default: return 0;
+        }
+    }
+
     public static boolean shouldZapWithArrows(boolean vod, boolean settingsVisible,
                                               boolean osdControlsFocused, boolean descriptionVisible) {
         return !vod && !settingsVisible && !osdControlsFocused && !descriptionVisible;

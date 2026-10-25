@@ -116,7 +116,10 @@ public final class PlayerActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         setContentView(root);
         playerView = new PlayerView(this);
-        playerView.setUseController(true);
+        // W TV nie pokazujemy panelu Media3 nad OSD i nie pozwalamy mu przechwytywać ↑/↓.
+        // W VOD natywny pasek pauzy, przewijania i wznowienia pozostaje dostępny.
+        playerView.setUseController(channel.vod);
+        playerView.setFocusable(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS);
         playerView.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_UP) showOsd();
@@ -486,6 +489,7 @@ public final class PlayerActivity extends Activity {
                     (key >= KeyEvent.KEYCODE_NUMPAD_0 && key <= KeyEvent.KEYCODE_NUMPAD_9) ||
                     key == KeyEvent.KEYCODE_PROG_RED || key == KeyEvent.KEYCODE_PROG_GREEN ||
                     key == KeyEvent.KEYCODE_PROG_YELLOW || key == KeyEvent.KEYCODE_PROG_BLUE ||
+                    key == KeyEvent.KEYCODE_MENU || key == KeyEvent.KEYCODE_INFO ||
                     key == KeyEvent.KEYCODE_CHANNEL_UP || key == KeyEvent.KEYCODE_CHANNEL_DOWN ||
                     key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN ||
                     (numberInput.length() > 0 && (key == KeyEvent.KEYCODE_DPAD_CENTER ||
@@ -522,6 +526,8 @@ public final class PlayerActivity extends Activity {
                 case KeyEvent.KEYCODE_PROG_GREEN: toggleOsd(); return true;
                 case KeyEvent.KEYCODE_PROG_YELLOW: toggleDescription(); return true;
                 case KeyEvent.KEYCODE_PROG_BLUE: toggleSettings(); return true;
+                case KeyEvent.KEYCODE_MENU: toggleSettings(); return true;
+                case KeyEvent.KEYCODE_INFO: toggleOsd(); return true;
                 case KeyEvent.KEYCODE_CHANNEL_UP: zap(1); return true;
                 case KeyEvent.KEYCODE_CHANNEL_DOWN: zap(-1); return true;
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -569,6 +575,13 @@ public final class PlayerActivity extends Activity {
         if (osd == null || osd.getVisibility() != View.VISIBLE) return false;
         View focus = getCurrentFocus();
         return focus != null && focus != playerView && focus != root;
+    }
+
+    @Override public void onBackPressed() {
+        if (settingsPanel != null) toggleSettings();
+        else if (descriptionOpen) toggleDescription();
+        else if (osd != null && osd.getVisibility() == View.VISIBLE) toggleOsd();
+        else super.onBackPressed();
     }
 
     private void updateProgressLabel() {

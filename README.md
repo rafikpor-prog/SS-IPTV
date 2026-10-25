@@ -2,7 +2,18 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.2.1
+## Funkcje 1.3.0
+
+### Nowy interfejs Android TV (1.3.0)
+
+- Na telewizorze i Android Box ekran **Telewizja** zajmuje praktycznie całe okno: pełna przewijana lista z logotypem, czytelną nazwą kanału, numerem i aktualnym programem. Nie ma nakładających się zakładek, wyszukiwarki ani dolnego paska nawigacji.
+- **←** na pierwszym kafelku/wierszu albo przycisk **☰** otwiera lewe menu. Na jego początku znajduje się **Kategorie**, a po wejściu lista kategorii M3U z osobnym przyciskiem powrotu. W menu są też Telewizja, VOD, Seriale, Ulubione, Ostatnie, EPG, Źródła, Ustawienia, przełącznik listy/kafelków.
+- **↑↓** przesuwa widoczne zaznaczenie między kanałami, **OK** uruchamia odtwarzanie zaznaczonej pozycji. Menu i kafelki pokazują wyraźną turkusową ramkę fokusu (nawet przy ciemnym tle); **czerwony** dodaje/usuwa zaznaczony kanał do ulubionych.
+- Kafelki są jednostką wyboru. Serduszka w środku nie przejmują pilota; przycisk OK działa na całym wierszu lub kafelku. W widoku telewizji na żywo ukryto natywne kontrolki Media3, aby nie przechwytywały strzałek **↑↓** zmieniających kanały. W VOD kontrolki pauzy i przewijania zostają.
+- Tryb TV jest włączany automatycznie na urządzeniach Leanback, z konfiguracją telewizyjną lub pilotem D-pad. W **Ustawienia → Interfejs ekranu** można go ręcznie włączyć na nietypowym Android Box, który nie deklaruje wsparcia Android TV. Dostępne jest też przełączenie na układ mobilny.
+- **MENU** otwiera/zamyka lewe menu; **Wstecz** najpierw zamyka podmenu kategorii, potem całe menu. Listy i kategorie M3U, ulubione, historia oraz logowanie pozostają zachowane po aktualizacji.
+
+### Pozostałe funkcje
 
 - Import pliku Extended M3U przez systemowy wybór pliku albo pobranie playlisty z URL.
 - Każdy kolejny import M3U tworzy **oddzielną listę** z własnym plikiem w prywatnej pamięci urządzenia; poprzednie listy i ulubione nie są usuwane. W ustawieniach można wybrać aktywną listę albo połączyć widok wszystkich list.
@@ -14,7 +25,7 @@ Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. 
 - Cztery źródła EPG: epg.ovh/pltv.xml, epg.polishteam.one/guide.xml, epg.ovh/pl.xml, epg.ovh/plar.xml.
 - Polski interfejs w ciemnym stylu, własna ikona, podgląd aktualnego programu na kanałach.
 - Widoczne u góry przyciski **+ Źródło** i **Ustawienia** oraz prawidłowy margines pod paskami systemowymi Androida.
-- Szybki dostęp do **Telewizja / VOD / Seriale / Ulubione / Ostatnie / Źródła** na dolnym pasku.
+- Na telefonach szybki dostęp do **Telewizja / VOD / Seriale / Ulubione / Ostatnie / Źródła** na dolnym pasku; na TV w wysuwanym panelu.
 - Kanały i filmy jako **lista albo kafelki**, z automatycznie pobieranymi logotypami, kategorią i opisem programu.
 - Serwery Xtream: Live, filmy (`get_vod_categories`, `get_vod_streams`) i seriale (`get_series_categories`, `get_series`, `get_series_info`). Zawartość serialu jest pobierana po otwarciu karty, następnie rozdzielana na sezony i odcinki. Proste seriale w M3U rozpoznawane są z nazw `S01E01`, `S01E02` itp.
 - Karty filmów i seriali z okładką, pełnym opisem dostarczonym przez serwer, przyciskiem odtwarzania lub wznowienia oraz listą odcinków. Każdy film i **każdy odcinek** ma własny lokalnie zapamiętany postęp.
@@ -38,7 +49,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.2.1 ma versionCode 4 i jest podpisywana tym samym kluczem co 1.0.0–1.2.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.3.0 ma versionCode 5 i jest podpisywana tym samym kluczem co 1.0.0–1.2.1, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \

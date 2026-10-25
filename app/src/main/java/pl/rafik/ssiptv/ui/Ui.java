@@ -74,11 +74,21 @@ public final class Ui {
     public static <T extends View> T tvFocus(T view) {
         view.setFocusable(true);
         view.setOnFocusChangeListener((v, focused) -> {
-            v.setScaleX(focused ? 1.035f : 1f);
-            v.setScaleY(focused ? 1.035f : 1f);
+            v.setScaleX(focused ? 1.025f : 1f);
+            v.setScaleY(focused ? 1.025f : 1f);
             v.setElevation(focused ? dp(v.getContext(), 8) : 0);
+            GradientDrawable highlight = outlined(v.getContext(), 0x2541E6D0, ACCENT, 12);
+            highlight.setStroke(dp(v.getContext(), 3), ACCENT);
+            v.setForeground(focused ? highlight : null);
         });
         return view;
+    }
+
+    /** Selector rysowany nad kafelkiem ListView/GridView, widoczny nawet na jego tle. */
+    public static GradientDrawable tvSelection(Context context) {
+        GradientDrawable highlight = outlined(context, 0x3241E6D0, ACCENT, 15);
+        highlight.setStroke(dp(context, 4), ACCENT);
+        return highlight;
     }
 
     public static LinearLayout.LayoutParams margins(Context c, int width, int height,

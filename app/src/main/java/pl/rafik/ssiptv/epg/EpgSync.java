@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.text.Normalizer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -94,9 +93,10 @@ public final class EpgSync {
             if (Thread.currentThread().isInterrupted()) break;
             settings.saveEpgSourceStatus(i, "Trwa odczyt…");
             try {
-                readXmltv(SOURCES[i], keys, guides, now, i);
+                int matched = readXmltv(SOURCES[i], keys, guides, now, i);
                 sourcesOk++;
-                settings.saveEpgSourceStatus(i, "✓ Odczytane • " +
+                settings.saveEpgSourceStatus(i, "✓ Odczytane · " + matched +
+                        " dopasowań • " +
                         new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
                                 .format(new Date(System.currentTimeMillis())));
             } catch (Exception e) {
@@ -107,8 +107,31 @@ public final class EpgSync {
             }
         }
         if (sourcesOk > 0) {
-            db.replaceGuides(guides);
-            String status = "EPG: " + guides.size() + " dopasowań • " + sourcesOk +
+            // Nie czyścimy działającego przewodnika, jeśli inne XMLTV zawiodły albo
+            // nie zawierały określonego kanału. Zachowujemy tylko nadal aktualne dane.
+            for (Map.Entry<Long, ChannelDatabase.Guide> entry : db.readGuides().entrySet()) {
+                ChannelDatabase.Guide cached = entry.getValue();
+                ChannelDatabase.Guide fresh = guides.get(entry.getKey());
+                if (fresh == null) {
+                    if (cached.end > now || cached.nextStart > now)
+                        guides.put(entry.getKey(), cached);
+                    continue;
+                }
+                if (fresh.current.isEmpty() && cached.end > now &&
+                        cached.current != null && !cached.current.isEmpty()) {
+                    fresh.current = cached.current;
+                    fresh.description = cached.description;
+                    fresh.start = cached.start;
+                    fresh.end = cached.end;
+                }
+                if (fresh.next.isEmpty() && cached.nextStart > now &&
+                        cached.next != null && !cached.next.isEmpty()) {
+                    fresh.next = cached.next;
+                    fresh.nextStart = cached.nextStart;
+                }
+            }
+            if (!guides.isEmpty()) db.replaceGuides(guides);
+            String status = "EPG: " + guides.size() + " kanałów • " + sourcesOk +
                     "/4 źródła" + (failures.isEmpty() ? "" : " • część źródeł niedostępna");
             settings.saveEpgStatus(System.currentTimeMillis(), status);
             return status;
@@ -119,21 +142,21 @@ public final class EpgSync {
     }
 
     private static void addKey(Map<String, List<Long>> keys, String text, long id) {
-        String key = normalize(text);
-        if (key.isEmpty()) return;
-        List<Long> ids = keys.computeIfAbsent(key, ignored -> new ArrayList<>());
-        if (!ids.contains(id)) ids.add(id);
+        for (String key : EpgMatcher.keys(text)) {
+            List<Long> ids = keys.computeIfAbsent(key, ignored -> new ArrayList<>());
+            if (!ids.contains(id)) ids.add(id);
+        }
     }
 
-    private static String normalize(String text) {
-        if (text == null) return "";
-        String lower = Normalizer.normalize(text.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "");
-        lower = lower.replaceAll("(?i)\\s+(hd|uhd|fhd|4k)$", "");
-        return lower.replaceAll("[^a-z0-9]", "");
+    private static List<Long> matchingIds(Map<String, List<Long>> keys, String name) {
+        for (String key : EpgMatcher.keys(name)) {
+            List<Long> match = keys.get(key);
+            if (match != null && !match.isEmpty()) return match;
+        }
+        return null;
     }
 
-    private static void readXmltv(String address, Map<String, List<Long>> keys,
+    private static int readXmltv(String address, Map<String, List<Long>> keys,
                                   Map<Long, ChannelDatabase.Guide> guides,
                                   long now, int priority) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(address).openConnection();
@@ -161,14 +184,14 @@ public final class EpgSync {
                         return n;
                     }
                 };
-                parse(bounded, keys, guides, now, priority);
+                return parse(bounded, keys, guides, now, priority);
             }
         } finally {
             conn.disconnect();
         }
     }
 
-    private static void parse(InputStream xml, Map<String, List<Long>> keys,
+    private static int parse(InputStream xml, Map<String, List<Long>> keys,
                               Map<Long, ChannelDatabase.Guide> guides,
                               long now, int priority) throws Exception {
         XmlPullParser parser = XmlPullParserFactory.newInstance().newPullParser();
@@ -176,12 +199,14 @@ public final class EpgSync {
         Map<String, List<Long>> ids = new HashMap<>();
         String stationId = "";
         String stationName = "";
+        List<Long> stationMatches = new ArrayList<>();
         String programmeId = "";
         String programmeTitle = "";
         String programmeDescription = "";
         long start = 0;
         long stop = 0;
         int type = parser.getEventType();
+        int applied = 0;
         while (type != XmlPullParser.END_DOCUMENT) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("Przerwano EPG");
             if (type == XmlPullParser.START_TAG) {
@@ -189,8 +214,15 @@ public final class EpgSync {
                 if ("channel".equals(tag)) {
                     stationId = parser.getAttributeValue(null, "id");
                     stationName = "";
+                    stationMatches.clear();
+                    List<Long> match = matchingIds(keys, stationId);
+                    if (match != null) stationMatches.addAll(match);
                 } else if ("display-name".equals(tag) && stationId != null && !stationId.isEmpty()) {
                     stationName = parser.nextText();
+                    List<Long> match = matchingIds(keys, stationName);
+                    if (match != null) for (Long id : match) {
+                        if (!stationMatches.contains(id)) stationMatches.add(id);
+                    }
                 } else if ("programme".equals(tag)) {
                     programmeId = parser.getAttributeValue(null, "channel");
                     start = parseDate(parser.getAttributeValue(null, "start"));
@@ -205,30 +237,36 @@ public final class EpgSync {
             } else if (type == XmlPullParser.END_TAG) {
                 String tag = parser.getName();
                 if ("channel".equals(tag) && stationId != null) {
-                    List<Long> matched = keys.get(normalize(stationId));
-                    if (matched == null) matched = keys.get(normalize(stationName));
-                    if (matched != null) ids.put(stationId, matched);
+                    if (stationMatches.isEmpty()) {
+                        List<Long> match = matchingIds(keys, stationName);
+                        if (match != null) stationMatches.addAll(match);
+                    }
+                    if (!stationMatches.isEmpty()) ids.put(stationId,
+                            new ArrayList<>(stationMatches));
                     stationId = "";
                     stationName = "";
                 } else if ("programme".equals(tag) && programmeId != null) {
                     List<Long> matched = ids.get(programmeId);
-                    if (matched == null) matched = keys.get(normalize(programmeId));
+                    if (matched == null) matched = matchingIds(keys, programmeId);
                     if (matched != null && !programmeTitle.trim().isEmpty()) {
                         String title = programmeTitle.trim();
                         if (title.length() > 180) title = title.substring(0, 180);
                         for (long id : matched) {
                             ChannelDatabase.Guide guide = guides.computeIfAbsent(id,
                                     ignored -> new ChannelDatabase.Guide());
-                            if (start <= now && stop > now && guide.current.isEmpty()) {
+                            if (start <= now && stop > now &&
+                                    (guide.current.isEmpty() || guide.end <= now)) {
                                 guide.current = title;
                                 guide.description = programmeDescription.length() > 4000 ?
                                         programmeDescription.substring(0, 4000) : programmeDescription;
                                 guide.start = start;
                                 guide.end = stop;
+                                applied++;
                             } else if (start > now && start < now + 18L * 60 * 60 * 1000 &&
-                                    (guide.next.isEmpty() || (priority == 0 && start < guide.nextStart))) {
+                                    (guide.next.isEmpty() || start < guide.nextStart)) {
                                 guide.next = title;
                                 guide.nextStart = start;
+                                applied++;
                             }
                         }
                     }
@@ -237,6 +275,7 @@ public final class EpgSync {
             }
             type = parser.next();
         }
+        return applied;
     }
 
     private static long parseDate(String xmlDate) {

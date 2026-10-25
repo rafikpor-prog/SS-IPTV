@@ -39,6 +39,7 @@ public final class M3uParser {
                     name = comma >= 0 ? line.substring(comma + 1).trim() : "";
                     if (comma >= 0) metadata = line.substring(0, comma);
                     id = attribute(metadata, "tvg-id");
+                    if (id.isEmpty()) id = attribute(metadata, "tvg-name");
                     logo = attribute(metadata, "tvg-logo");
                     description = attribute(metadata, "tvg-description");
                     group = attribute(metadata, "group-title");

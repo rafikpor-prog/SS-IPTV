@@ -10,13 +10,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public final class Ui {
-    public static final int BG = Color.rgb(7, 19, 34);
-    public static final int SURFACE = Color.rgb(17, 35, 55);
-    public static final int CARD = Color.rgb(21, 43, 64);
-    public static final int ACCENT = Color.rgb(39, 230, 208);
-    public static final int SECONDARY = Color.rgb(139, 165, 187);
-    public static final int WHITE = Color.rgb(240, 248, 255);
-    public static final int MUTED = Color.rgb(105, 134, 160);
+    public static final int BG = Color.rgb(10, 16, 26);
+    public static final int SURFACE = Color.rgb(19, 28, 41);
+    public static final int CARD = Color.rgb(27, 39, 54);
+    public static final int ACCENT = Color.rgb(70, 218, 199);
+    public static final int SECONDARY = Color.rgb(170, 187, 204);
+    public static final int WHITE = Color.rgb(244, 248, 252);
+    public static final int MUTED = Color.rgb(118, 141, 165);
     private Ui() {}
 
     public static int dp(Context context, float value) {
@@ -74,11 +74,11 @@ public final class Ui {
     public static <T extends View> T tvFocus(T view) {
         view.setFocusable(true);
         view.setOnFocusChangeListener((v, focused) -> {
-            v.setScaleX(focused ? 1.025f : 1f);
-            v.setScaleY(focused ? 1.025f : 1f);
+            v.setScaleX(focused ? 1.017f : 1f);
+            v.setScaleY(focused ? 1.017f : 1f);
             v.setElevation(focused ? dp(v.getContext(), 8) : 0);
-            GradientDrawable highlight = outlined(v.getContext(), 0x2541E6D0, ACCENT, 12);
-            highlight.setStroke(dp(v.getContext(), 3), ACCENT);
+            GradientDrawable highlight = outlined(v.getContext(), 0x2046DAC7, ACCENT, 10);
+            highlight.setStroke(dp(v.getContext(), 2), ACCENT);
             v.setForeground(focused ? highlight : null);
         });
         return view;
@@ -86,8 +86,8 @@ public final class Ui {
 
     /** Selector rysowany nad kafelkiem ListView/GridView, widoczny nawet na jego tle. */
     public static GradientDrawable tvSelection(Context context) {
-        GradientDrawable highlight = outlined(context, 0x3241E6D0, ACCENT, 15);
-        highlight.setStroke(dp(context, 4), ACCENT);
+        GradientDrawable highlight = outlined(context, 0x2446DAC7, ACCENT, 12);
+        highlight.setStroke(dp(context, 3), ACCENT);
         return highlight;
     }
 

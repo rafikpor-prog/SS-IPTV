@@ -2,7 +2,21 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.3.0
+## Funkcje 1.4.0
+
+### Android TV i odtwarzacz — aktualizacja 1.4.0
+
+- Po otwarciu aplikacji z launchera Android TV zawsze wyświetla się katalog **Telewizja**. Nie jest przywracany ekran ustawień lub VOD zamiast listy kanałów.
+- Pilot: podczas oglądania TV strzałki **↑/↓** przełączają kanały (również gdy OSD jest tylko automatycznie widoczne); **CH+/CH−** również działają. Klawisze są obsługiwane zanim trafią do kontrolera wideo. Zmiana kanału następuje wewnątrz tego samego ekranu, bez otwierania kolejnej aktywności.
+- Naciśnięcie **OK**, **←** lub **→** podczas oglądania Live uruchamia *świadomy tryb fokusu OSD*. Strzałkami przechodzisz po jego czterech małych akcjach, zatwierdzasz OK, a **Wstecz** powraca do zmiany kanałów. Automatyczne OSD nie zatrzymuje przełączania strzałkami.
+- OSD jest bardziej kompaktowe: zamiast dużych kolorowych bloków ma niewielkie kontrolki z kolorowymi punktami. Tytuł aktualnie emitowanego programu ma większy i wyraźniejszy font, osobno od nazwy i logo kanału.
+- Interfejs TV został ujednolicony: stonowane kolory, panel boczny bez grubej obwódki, natywne wektorowe ikony kategorii i sekcji, subtelne lecz widoczne zaznaczenie fokusu.
+- Media3/ExoPlayer utrzymuje bufor strumieniowania ustawiony na 15–60 s (w granicach okna live i dostępnej pamięci), start od ok. 2 s danych, wznowienie po zacięciu od 5 s. Błędy sieciowe uruchamiają najwyżej dwie próby ponownego połączenia. Wielkość rzeczywistego bufora zależy od dostawcy IPTV.
+- Włączono zapasowy dekoder systemowy, gdy pierwszy dekoder MediaCodec nie uruchomi się. W panelu odtwarzania można wybrać inną obsługiwaną **ścieżkę dźwiękową**; w przypadku braku dekodera pojawia się informacja. Nie wszystkie kodeki (np. DTS na niektórych boxach) są gwarantowane bez dodatkowych bibliotek.
+- Dopasowanie EPG z każdego poprawnie pobranego XMLTV obejmuje `tvg-id`, wiele nazw `display-name`, polskie znaki oraz warianty HD/FHD/4K i dopiski `.pl`. Częściowe braki i błędy źródeł nie usuwają nieprzeterminowanych wpisów przewodnika. W statusie źródła widać liczbę rzeczywistych dopasowań.
+- Import M3U wykorzystuje także `tvg-name` jako identyfikator dopasowania EPG, gdy dostawca nie podał `tvg-id`.
+
+### Wcześniejsze funkcje
 
 ### Nowy interfejs Android TV (1.3.0)
 
@@ -49,7 +63,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.3.0 ma versionCode 5 i jest podpisywana tym samym kluczem co 1.0.0–1.2.1, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.4.0 ma versionCode 6 i jest podpisywana tym samym kluczem co 1.0.0–1.3.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \

@@ -85,6 +85,7 @@ public final class MainActivity extends Activity {
     private TextView tvCount;
     private AdapterView<?> tvCollection;
     private List<Channel> allChannels = new ArrayList<>();
+    private Map<Long, Integer> liveOrdinals = new HashMap<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
 
     @Override public void onCreate(Bundle state) {
@@ -131,10 +132,17 @@ public final class MainActivity extends Activity {
             String active = secure.activeSource();
             if (!active.isEmpty()) entries.removeIf(item -> !active.equals(item.source));
             entries = withSeriesCards(entries, database.seriesFavorites());
+            Map<Long, Integer> numbering = new HashMap<>();
+            int liveNumber = 0;
+            for (Channel item : entries) {
+                if (!item.vod && !item.isSeries() && !item.isEpisode())
+                    numbering.put(item.id, liveNumber++);
+            }
             Map<Long, ChannelDatabase.Guide> programs = database.readGuides();
             List<Channel> catalog = entries;
             runOnUiThread(() -> {
                 allChannels = catalog;
+                liveOrdinals = numbering;
                 guides = programs;
                 if (isCatalogTab()) {
                     updateChips();
@@ -227,18 +235,31 @@ public final class MainActivity extends Activity {
         tvRoot.addView(layout, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout rail = Ui.column(this);
-        rail.setPadding(0, Ui.dp(this, 11), Ui.dp(this, 8), 0);
-        TextView menu = Ui.text(this, "☰", 26, Ui.ACCENT, true);
+        rail.setPadding(0, Ui.dp(this, 16), Ui.dp(this, 8), 0);
+        TextView monogram = Ui.text(this, "SS", 22, Ui.ACCENT, true);
+        monogram.setGravity(Gravity.CENTER);
+        monogram.setBackground(Ui.rounded(this, Ui.SURFACE, 13));
+        rail.addView(monogram, new LinearLayout.LayoutParams(-1, Ui.dp(this, 56)));
+        TextView brand = Ui.text(this, "IPTV", 10, Ui.MUTED, true);
+        brand.setGravity(Gravity.CENTER);
+        brand.setLetterSpacing(0.16f);
+        rail.addView(brand, Ui.margins(this, -1, 21, 0, 2, 0, 20));
+        LinearLayout menu = Ui.column(this);
         menu.setGravity(Gravity.CENTER);
         menu.setContentDescription("Otwórz menu kategorii i sekcji");
         menu.setBackground(Ui.rounded(this, Ui.SURFACE, 12));
+        ImageView menuIcon = new ImageView(this);
+        menuIcon.setImageResource(R.drawable.ic_nav_menu);
+        menuIcon.setColorFilter(Ui.ACCENT);
+        menu.addView(menuIcon, new LinearLayout.LayoutParams(Ui.dp(this, 25), Ui.dp(this, 25)));
+        TextView menuLabel = Ui.text(this, "MENU", 9, Ui.SECONDARY, true);
+        menuLabel.setGravity(Gravity.CENTER);
+        menuLabel.setLetterSpacing(0.06f);
+        menu.addView(menuLabel, Ui.margins(this, -1, 19, 0, 2, 0, 0));
         menu.setOnClickListener(v -> openTvDrawer());
         Ui.tvFocus(menu);
         rail.addView(menu, new LinearLayout.LayoutParams(-1, Ui.dp(this, 66)));
-        TextView brand = Ui.text(this, "SS", 13, Ui.SECONDARY, true);
-        brand.setGravity(Gravity.CENTER);
-        rail.addView(brand, Ui.margins(this, -1, 38, 0, 15, 0, 0));
-        layout.addView(rail, new LinearLayout.LayoutParams(Ui.dp(this, 74), -1));
+        layout.addView(rail, new LinearLayout.LayoutParams(Ui.dp(this, 72), -1));
 
         content = Ui.column(this);
         content.setPadding(Ui.dp(this, 13), 0, 0, 0);
@@ -253,17 +274,17 @@ public final class MainActivity extends Activity {
         else if ("Ustawienia".equals(name)) showSettings();
 
         tvDim = new View(this);
-        tvDim.setBackgroundColor(0xAA020C15);
+        tvDim.setBackgroundColor(0xB6000710);
         tvDim.setOnClickListener(v -> closeTvDrawer());
         tvDim.setVisibility(View.GONE);
         tvRoot.addView(tvDim, new FrameLayout.LayoutParams(-1, -1));
         tvDrawer = new ScrollView(this);
         tvDrawer.setFillViewport(false);
         tvDrawer.setVerticalScrollBarEnabled(false);
-        tvDrawer.setBackground(Ui.outlined(this, Ui.SURFACE, Ui.ACCENT, 16));
+        tvDrawer.setBackground(Ui.rounded(this, 0xFF172231, 17));
         tvDrawer.setVisibility(View.GONE);
         FrameLayout.LayoutParams drawerParams = new FrameLayout.LayoutParams(
-                Math.min(Ui.dp(this, 348),
+                Math.min(Ui.dp(this, 354),
                         getResources().getDisplayMetrics().widthPixels - Ui.dp(this, 65)),
                 -1, Gravity.LEFT);
         tvRoot.addView(tvDrawer, drawerParams);
@@ -283,7 +304,7 @@ public final class MainActivity extends Activity {
         tvCount = Ui.text(this, "", 14, Ui.ACCENT, true);
         tvCount.setPadding(Ui.dp(this, 20), 0, 0, 0);
         titleRow.addView(tvCount, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView hint = Ui.text(this, "← Kategorie / Menu     OK ▶ Odtwórz", 12,
+        TextView hint = Ui.text(this, "←  Menu i kategorie     •     OK  Odtwórz", 12,
                 Ui.SECONDARY, false);
         titleRow.addView(hint);
         content.addView(titleRow, Ui.margins(this, -1, 64, 0, 0, 0, 4));
@@ -302,77 +323,108 @@ public final class MainActivity extends Activity {
 
     private void populateTvDrawer() {
         LinearLayout items = Ui.column(this);
-        items.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18),
+        items.setPadding(Ui.dp(this, 18), Ui.dp(this, 21), Ui.dp(this, 18),
                 Ui.dp(this, 24));
         tvDrawer.removeAllViews();
         tvDrawer.addView(items);
-        items.addView(Ui.text(this, "SS-IPTV", 26, Ui.ACCENT, true),
-                Ui.margins(this, -1, 47, 0, 0, 0, 6));
+        LinearLayout identity = Ui.row(this);
+        TextView mark = Ui.text(this, "SS", 19, Ui.ACCENT, true);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(Ui.rounded(this, Ui.CARD, 10));
+        identity.addView(mark, new LinearLayout.LayoutParams(Ui.dp(this, 48), Ui.dp(this, 48)));
+        LinearLayout brandText = Ui.column(this);
+        brandText.setPadding(Ui.dp(this, 12), 0, 0, 0);
+        brandText.addView(Ui.text(this, "SS IPTV", 22, Ui.WHITE, true));
+        TextView detail = Ui.text(this, "TWOJA TELEWIZJA", 10, Ui.SECONDARY, true);
+        detail.setLetterSpacing(0.13f);
+        brandText.addView(detail);
+        identity.addView(brandText);
+        items.addView(identity, Ui.margins(this, -1, 65, 0, 0, 0, 15));
+        View divider = new View(this);
+        divider.setBackgroundColor(0xFF2E3B4A);
+        items.addView(divider, Ui.margins(this, -1, 1, 0, 0, 0, 15));
         View initialFocus = null;
         if (tvCategoryDrawerMode && isCatalogTab()) {
-            TextView back = tvDrawerItem("‹   Wróć do menu", false, () -> {
+            View back = tvDrawerItem("Wróć do menu", R.drawable.ic_nav_menu, false, () -> {
                 tvCategoryDrawerMode = false;
                 populateTvDrawer();
             });
             items.addView(back, Ui.margins(this, -1, 50, 0, 0, 0, 8));
-            items.addView(Ui.text(this, "KATEGORIE • " + tab, 12, Ui.ACCENT, true),
+            items.addView(Ui.text(this, "KATEGORIE   /   " + tab.toUpperCase(Locale.ROOT),
+                    11, Ui.SECONDARY, true),
                     Ui.margins(this, -1, 34, 0, 0, 0, 6));
             for (String group : tvCategoryNames()) {
                 boolean selected = group.equals(selectedGroup);
-                TextView item = tvDrawerItem((selected ? "●  " : "○  ") + group,
-                        selected, () -> {
+                View item = tvDrawerItem(group, 0, selected, () -> {
                     selectedGroup = group;
                     closeTvDrawer();
                     filterChannels();
                 });
-                item.setSingleLine(true);
-                item.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                items.addView(item, Ui.margins(this, -1, 43, 0, 2, 0, 2));
+                items.addView(item, Ui.margins(this, -1, 46, 0, 1, 0, 1));
                 if (selected) initialFocus = item;
             }
         } else {
-            items.addView(Ui.text(this, "MENU", 12, Ui.SECONDARY, true),
+            items.addView(Ui.text(this, "ODKRYWAJ", 11, Ui.SECONDARY, true),
                     Ui.margins(this, -1, -2, 0, 0, 0, 9));
             if (isCatalogTab()) {
-                TextView categories = tvDrawerItem("▤   Kategorie: " + selectedGroup + "   ›",
-                        true, () -> {
+                View categories = tvDrawerItem("Kategorie  ·  " + selectedGroup,
+                        R.drawable.ic_nav_categories, true, () -> {
                     tvCategoryDrawerMode = true;
                     populateTvDrawer();
                 });
-                categories.setSingleLine(true);
-                categories.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                items.addView(categories, Ui.margins(this, -1, 51, 0, 2, 0, 10));
+                items.addView(categories, Ui.margins(this, -1, 53, 0, 2, 0, 12));
                 initialFocus = categories;
             }
             final String[] tabs = {"Telewizja", "VOD", "Seriale", "Ulubione", "Ostatnie",
                     "EPG", "Źródła", "Ustawienia"};
-            final String[] icons = {"▣", "▶", "▤", "♥", "◷", "◫", "＋", "⚙"};
+            final int[] icons = {R.drawable.ic_nav_tv, R.drawable.ic_nav_movies,
+                    R.drawable.ic_nav_series, R.drawable.ic_nav_heart,
+                    R.drawable.ic_nav_history, R.drawable.ic_nav_epg,
+                    R.drawable.ic_nav_sources, R.drawable.ic_nav_settings};
             for (int i = 0; i < tabs.length; i++) {
                 String destination = tabs[i];
-                TextView item = tvDrawerItem(icons[i] + "   " + destination,
+                View item = tvDrawerItem(destination, icons[i],
                         destination.equals(tab), () -> showTab(destination));
-                items.addView(item, Ui.margins(this, -1, 47, 0, 2, 0, 2));
+                items.addView(item, Ui.margins(this, -1, 48, 0, 1, 0, 1));
                 if (initialFocus == null && destination.equals(tab)) initialFocus = item;
             }
             if (isCatalogTab()) {
-                items.addView(Ui.text(this, "WIDOK KANAŁÓW", 12, Ui.ACCENT, true),
+                items.addView(Ui.text(this, "SPOSÓB WYŚWIETLANIA", 11, Ui.SECONDARY, true),
                         Ui.margins(this, -1, 35, 0, 13, 0, 4));
-                items.addView(tvDrawerItem("☰   Lista", !tiled, () -> setTiled(false)),
-                        Ui.margins(this, -1, 43, 0, 2, 0, 2));
-                items.addView(tvDrawerItem("▦   Kafelki", tiled, () -> setTiled(true)),
-                        Ui.margins(this, -1, 43, 0, 2, 0, 2));
+                items.addView(tvDrawerItem("Lista kanałów", R.drawable.ic_nav_list,
+                        !tiled, () -> setTiled(false)),
+                        Ui.margins(this, -1, 46, 0, 1, 0, 1));
+                items.addView(tvDrawerItem("Kafelki", R.drawable.ic_nav_categories,
+                        tiled, () -> setTiled(true)),
+                        Ui.margins(this, -1, 46, 0, 1, 0, 1));
             }
         }
         if (initialFocus != null) initialFocus.requestFocus();
     }
 
-    private TextView tvDrawerItem(String caption, boolean selected, Runnable action) {
-        TextView button = Ui.text(this, caption, 16, selected ? Ui.ACCENT : Ui.WHITE, selected);
-        button.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 9), 0);
-        button.setBackground(Ui.rounded(this, selected ? 0xFF20495A : Ui.CARD, 10));
-        button.setOnClickListener(v -> action.run());
-        Ui.tvFocus(button);
-        return button;
+    private View tvDrawerItem(String caption, int iconResource, boolean selected, Runnable action) {
+        LinearLayout row = Ui.row(this);
+        row.setPadding(Ui.dp(this, 6), 0, Ui.dp(this, 10), 0);
+        row.setBackground(Ui.rounded(this, selected ? 0xFF293D4A : 0x001B2736, 9));
+        View active = new View(this);
+        active.setBackground(Ui.rounded(this, selected ? Ui.ACCENT : Color.TRANSPARENT, 4));
+        row.addView(active, new LinearLayout.LayoutParams(Ui.dp(this, 3), Ui.dp(this, 26)));
+        if (iconResource != 0) {
+            ImageView symbol = new ImageView(this);
+            symbol.setImageResource(iconResource);
+            symbol.setColorFilter(selected ? Ui.ACCENT : Ui.SECONDARY);
+            LinearLayout.LayoutParams iconParams = Ui.margins(this, 21, 21, 13, 0, 12, 0);
+            row.addView(symbol, iconParams);
+        }
+        TextView label = Ui.text(this, caption, 15,
+                selected ? Ui.WHITE : Ui.SECONDARY, selected);
+        label.setSingleLine(true);
+        label.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(label, new LinearLayout.LayoutParams(0, -1, 1));
+        row.setContentDescription(caption);
+        row.setOnClickListener(v -> action.run());
+        Ui.tvFocus(row);
+        return row;
     }
 
     private List<String> tvCategoryNames() {
@@ -853,7 +905,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.3.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.4.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1208,7 +1260,11 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        handleExternalPlaylist(intent);
+        if (Intent.ACTION_MAIN.equals(intent.getAction())) {
+            // Ponowne uruchomienie z ekranu Android TV zawsze zaczyna od kanałów.
+            showTab("Telewizja");
+            reloadData();
+        } else handleExternalPlaylist(intent);
     }
 
     private void importPlaylistUri(Uri uri) {
@@ -1376,12 +1432,7 @@ public final class MainActivity extends Activity {
     }
 
     private int liveIndex(Channel target) {
-        int index = 0;
-        for (Channel item : allChannels) {
-            if (item.vod || item.isSeries() || item.isEpisode()) continue;
-            if (item.id == target.id) return index;
-            index++;
-        }
-        return index;
+        Integer index = liveOrdinals.get(target.id);
+        return index == null ? 0 : index;
     }
 }

@@ -26,6 +26,7 @@ public final class M3uParserTest {
         assertEquals("https://stream.example/live/1.m3u8", parsed.get(0).url);
         assertEquals("Sport", parsed.get(1).group);
         assertEquals("Sport Extra", parsed.get(1).name);
+        assertEquals("Sport Test", parsed.get(1).tvgId);
     }
 
     @Test public void honorsExtgrpAndResetsBetweenChannels() throws Exception {

@@ -116,13 +116,43 @@ public final class XtreamClient {
                 String extension = movie.optString("container_extension", "mp4");
                 if (!extension.matches("[a-zA-Z0-9]{1,5}")) extension = "mp4";
                 String internal = "xtream://movie/" + id + "." + extension;
-                result.add(new Channel(movie.optString("name", "Film " + id),
+                Channel film = new Channel(movie.optString("name", "Film " + id),
                         vodCategories.getOrDefault(movie.optString("category_id"), "Filmy"),
                         "", movie.optString("stream_icon", ""), internal,
-                        ChannelDatabase.XTREAM).asVod());
+                        ChannelDatabase.XTREAM).asVod();
+                film.description = movie.optString("plot", "");
+                result.add(film);
             }
         } catch (Exception optionalVodError) {
             if (result.isEmpty()) throw new IOException("Serwer nie zwrócił kanałów ani filmów VOD.");
+        }
+        try {
+            Map<String, String> seriesCategories = new HashMap<>();
+            try {
+                JSONArray seriesCats = new JSONArray(request(api("get_series_categories")));
+                for (int i = 0; i < seriesCats.length(); i++) {
+                    JSONObject cat = seriesCats.optJSONObject(i);
+                    if (cat != null) seriesCategories.put(cat.optString("category_id"),
+                            cat.optString("category_name", "Seriale"));
+                }
+            } catch (Exception ignored) { /* Serie mogą działać bez osobnej listy kategorii. */ }
+            JSONArray series = new JSONArray(request(api("get_series")));
+            for (int i = 0; i < series.length(); i++) {
+                JSONObject entry = series.optJSONObject(i);
+                if (entry == null) continue;
+                String id = entry.optString("series_id", "");
+                if (id.isEmpty()) continue;
+                Channel parent = new Channel(entry.optString("name", "Serial " + id),
+                        seriesCategories.getOrDefault(entry.optString("category_id"), "Seriale"),
+                        "", entry.optString("cover", ""), "xtream://catalog/" + id,
+                        ChannelDatabase.XTREAM);
+                parent.kind = "SERIES";
+                parent.seriesId = "xtream:" + id;
+                parent.description = entry.optString("plot", "");
+                result.add(parent);
+            }
+        } catch (Exception optionalSeriesError) {
+            // Część paneli Xtream nie obsługuje seriali — TV i filmy pozostają dostępne.
         }
         if (result.isEmpty()) throw new IOException("Serwer nie zwrócił kanałów ani filmów VOD.");
         return result;
@@ -133,11 +163,68 @@ public final class XtreamClient {
         return fetchChannels();
     }
 
+    public List<Channel> fetchSeriesEpisodes(Channel series) throws Exception {
+        if (!series.seriesId.startsWith("xtream:")) return new ArrayList<>();
+        String id = series.seriesId.substring("xtream:".length());
+        JSONObject details = new JSONObject(request(api("get_series_info") + "&series_id=" + encode(id)));
+        JSONObject seasons = details.optJSONObject("episodes");
+        List<Channel> result = new ArrayList<>();
+        if (seasons == null) return result;
+        JSONObject info = details.optJSONObject("info");
+        String cover = info == null ? series.logo : info.optString("cover", series.logo);
+        for (java.util.Iterator<String> keys = seasons.keys(); keys.hasNext();) {
+            String seasonKey = keys.next();
+            JSONArray entries = seasons.optJSONArray(seasonKey);
+            if (entries == null) continue;
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry == null) continue;
+                String episodeId = entry.optString("id", "");
+                if (episodeId.isEmpty()) continue;
+                JSONObject meta = entry.optJSONObject("info");
+                int season = entry.optInt("season", safeNumber(seasonKey));
+                int episode = entry.optInt("episode_num", i + 1);
+                String extension = entry.optString("container_extension", "mp4");
+                if (!extension.matches("[a-zA-Z0-9]{1,5}")) extension = "mp4";
+                Channel item = new Channel(entry.optString("title", "Odcinek " + episode),
+                        series.group, "", meta == null ? cover :
+                        meta.optString("movie_image", cover),
+                        "xtream://series/" + episodeId + "." + extension,
+                        ChannelDatabase.XTREAM);
+                item.kind = "EPISODE";
+                item.vod = true;
+                item.seriesId = series.seriesId;
+                item.season = season;
+                item.episode = episode;
+                item.description = meta == null ? "" : meta.optString("plot", "");
+                result.add(item);
+                if (result.size() >= 5000) return result;
+            }
+        }
+        result.sort((a, b) -> a.season == b.season ? Integer.compare(a.episode, b.episode)
+                : Integer.compare(a.season, b.season));
+        return result;
+    }
+
+    public String[] fetchMovieMetadata(Channel movie) throws Exception {
+        if (!movie.url.startsWith("xtream://movie/")) return new String[]{movie.description, movie.logo};
+        String id = movie.url.substring("xtream://movie/".length()).split("\\.", 2)[0];
+        JSONObject details = new JSONObject(request(api("get_vod_info") + "&vod_id=" + encode(id)));
+        JSONObject info = details.optJSONObject("info");
+        return info == null ? new String[]{movie.description, movie.logo} :
+                new String[]{info.optString("plot", movie.description),
+                        info.optString("movie_image", movie.logo)};
+    }
+
+    private static int safeNumber(String text) {
+        try { return Integer.parseInt(text); } catch (NumberFormatException ignored) { return 0; }
+    }
+
     public static String streamUrl(Credentials creds, String internalUrl) {
-        boolean vod = internalUrl.startsWith("xtream://movie/");
-        String stream = internalUrl.substring(vod ? "xtream://movie/".length()
-                : "xtream://live/".length());
-        return creds.server + (vod ? "/movie/" : "/live/") + encode(creds.username) + "/" +
+        String kind = internalUrl.startsWith("xtream://movie/") ? "movie" :
+                internalUrl.startsWith("xtream://series/") ? "series" : "live";
+        String stream = internalUrl.substring(("xtream://" + kind + "/").length());
+        return creds.server + "/" + kind + "/" + encode(creds.username) + "/" +
                 encode(creds.password) + "/" + stream;
     }
 

@@ -178,6 +178,7 @@ public final class EpgSync {
         String stationName = "";
         String programmeId = "";
         String programmeTitle = "";
+        String programmeDescription = "";
         long start = 0;
         long stop = 0;
         int type = parser.getEventType();
@@ -195,8 +196,11 @@ public final class EpgSync {
                     start = parseDate(parser.getAttributeValue(null, "start"));
                     stop = parseDate(parser.getAttributeValue(null, "stop"));
                     programmeTitle = "";
+                    programmeDescription = "";
                 } else if ("title".equals(tag) && programmeId != null && !programmeId.isEmpty()) {
                     programmeTitle = parser.nextText();
+                } else if ("desc".equals(tag) && programmeId != null && !programmeId.isEmpty()) {
+                    programmeDescription = parser.nextText();
                 }
             } else if (type == XmlPullParser.END_TAG) {
                 String tag = parser.getName();
@@ -217,6 +221,8 @@ public final class EpgSync {
                                     ignored -> new ChannelDatabase.Guide());
                             if (start <= now && stop > now && guide.current.isEmpty()) {
                                 guide.current = title;
+                                guide.description = programmeDescription.length() > 4000 ?
+                                        programmeDescription.substring(0, 4000) : programmeDescription;
                                 guide.start = start;
                                 guide.end = stop;
                             } else if (start > now && start < now + 18L * 60 * 60 * 1000 &&

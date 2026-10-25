@@ -13,6 +13,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -67,6 +68,7 @@ public final class MainActivity extends Activity {
     private String tab = "Telewizja";
     private String selectedGroup = ALL;
     private String query = "";
+    private String previousTab = "Telewizja";
     private boolean tiled;
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
@@ -101,9 +103,13 @@ public final class MainActivity extends Activity {
     private void reloadData() {
         io.execute(() -> {
             List<Channel> entries = database.allChannels();
+            String active = secure.activeSource();
+            if (!active.isEmpty()) entries.removeIf(item -> !active.equals(item.source));
+            entries = withSeriesCards(entries, database.seriesFavorites());
             Map<Long, ChannelDatabase.Guide> programs = database.readGuides();
+            List<Channel> catalog = entries;
             runOnUiThread(() -> {
-                allChannels = entries;
+                allChannels = catalog;
                 guides = programs;
                 if (isCatalogTab()) {
                     updateChips();
@@ -115,7 +121,32 @@ public final class MainActivity extends Activity {
         });
     }
 
+    /** M3U często zawiera tylko odcinki, więc tworzymy w katalogu kartę serialu. */
+    private static List<Channel> withSeriesCards(List<Channel> entries,
+                                                 java.util.Set<String> favoriteSeries) {
+        List<Channel> result = new ArrayList<>(entries);
+        Map<String, Channel> parents = new LinkedHashMap<>();
+        for (Channel item : entries) if (item.isSeries())
+            parents.put(item.source + "\u0000" + item.seriesId, item);
+        for (Channel item : entries) {
+            if (!item.isEpisode() || item.seriesId.isEmpty()) continue;
+            String key = item.source + "\u0000" + item.seriesId;
+            if (parents.containsKey(key)) continue;
+            Channel parent = new Channel(item.seriesId, item.group, "", item.logo, "",
+                    item.source);
+            parent.kind = "SERIES";
+            parent.seriesId = item.seriesId;
+            parent.description = item.description;
+            parent.favorite = favoriteSeries.contains(key);
+            parent.id = -(result.size() + 1L);
+            parents.put(key, parent);
+            result.add(parent);
+        }
+        return result;
+    }
+
     private void showTab(String name) {
+        if (!"Ustawienia".equals(tab) && !"Ustawienia".equals(name)) previousTab = name;
         if (!name.equals(tab) && isCatalogName(name)) {
             selectedGroup = ALL;
             query = "";
@@ -173,12 +204,14 @@ public final class MainActivity extends Activity {
         source.setBackground(Ui.rounded(this, Ui.ACCENT, 11));
         source.setContentDescription("Dodaj plik M3U lub zaloguj się do IPTV");
         source.setOnClickListener(v -> showTab("Źródła"));
+        Ui.tvFocus(source);
         bar.addView(source);
 
         TextView settings = Ui.text(this, "⚙", 23, Ui.WHITE, false);
         settings.setGravity(Gravity.CENTER);
         settings.setContentDescription("Ustawienia aplikacji");
         settings.setOnClickListener(v -> showTab("Ustawienia"));
+        Ui.tvFocus(settings);
         bar.addView(settings, Ui.margins(this, 42, 46, 7, 0, 0, 0));
         return bar;
     }
@@ -187,8 +220,8 @@ public final class MainActivity extends Activity {
         LinearLayout bottom = Ui.row(this);
         bottom.setPadding(Ui.dp(this, 9), Ui.dp(this, 4), Ui.dp(this, 9), Ui.dp(this, 5));
         bottom.setBackgroundColor(Ui.SURFACE);
-        String[] names = {"Telewizja", "VOD", "Ulubione", "Ostatnie", "Źródła"};
-        String[] icons = {"▣", "▶", "♥", "◷", "＋"};
+        String[] names = {"Telewizja", "VOD", "Seriale", "Ulubione", "Ostatnie", "Źródła"};
+        String[] icons = {"▣", "▶", "▤", "♥", "◷", "＋"};
         for (int i = 0; i < names.length; i++) {
             final String itemName = names[i];
             boolean chosen = itemName.equals(tab);
@@ -201,6 +234,7 @@ public final class MainActivity extends Activity {
             item.addView(icon);
             item.addView(label);
             item.setOnClickListener(v -> showTab(itemName));
+            Ui.tvFocus(item);
             bottom.addView(item, new LinearLayout.LayoutParams(0, -1, 1));
         }
         return bottom;
@@ -211,7 +245,7 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isCatalogName(String name) {
-        return "Telewizja".equals(name) || "VOD".equals(name) ||
+        return "Telewizja".equals(name) || "VOD".equals(name) || "Seriale".equals(name) ||
                 "Ulubione".equals(name) || "Ostatnie".equals(name);
     }
 
@@ -221,7 +255,8 @@ public final class MainActivity extends Activity {
         content.addView(home, new LinearLayout.LayoutParams(-1, -1));
         LinearLayout top = Ui.row(this);
         String headline = "Telewizja".equals(tab) ? "Telewizja na żywo" :
-                "VOD".equals(tab) ? "Filmy i VOD" :
+                "VOD".equals(tab) ? "Biblioteka filmów" :
+                "Seriale".equals(tab) ? "Twoje seriale" :
                 "Ulubione".equals(tab) ? "Twoje ulubione" : "Ostatnio oglądane";
         TextView title = Ui.text(this, headline, 22, Ui.WHITE, true);
         top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
@@ -231,7 +266,8 @@ public final class MainActivity extends Activity {
         top.addView(guide);
         home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
         String subline = "Telewizja".equals(tab) ? "Kanały, kategorie i program na żywo" :
-                "VOD".equals(tab) ? "Wznawiaj filmy dokładnie od ostatniej sceny" :
+                "VOD".equals(tab) ? "Okładki, opisy i kontynuowanie oglądania" :
+                "Seriale".equals(tab) ? "Sezony, odcinki i zapis postępu każdego odcinka" :
                 "Ulubione".equals(tab) ? "Ulubione kanały i filmy w jednym miejscu" :
                 "Twoja historia odtwarzania";
         home.addView(Ui.text(this, subline, 12, Ui.SECONDARY, false),
@@ -255,7 +291,7 @@ public final class MainActivity extends Activity {
         categories.setHorizontalScrollBarEnabled(false);
         chips = Ui.row(this);
         categories.addView(chips);
-        if ("Telewizja".equals(tab) || "VOD".equals(tab))
+        if ("Telewizja".equals(tab) || "VOD".equals(tab) || "Seriale".equals(tab))
             home.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
         updateChips();
 
@@ -312,7 +348,7 @@ public final class MainActivity extends Activity {
             collection = list;
         }
         collection.setOnItemClickListener((parent, view, position, id) ->
-                play(adapter.visible.get(position)));
+                openContent(adapter.visible.get(position)));
         resultsFrame.addView((View) collection, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout empty = Ui.column(this);
         empty.setGravity(Gravity.CENTER);
@@ -335,7 +371,8 @@ public final class MainActivity extends Activity {
         Map<String, Integer> groups = new LinkedHashMap<>();
         for (Channel channel : allChannels) {
             if ("Telewizja".equals(tab) && channel.vod) continue;
-            if ("VOD".equals(tab) && !channel.vod) continue;
+            if ("VOD".equals(tab) && !channel.isMovie()) continue;
+            if ("Seriale".equals(tab) && !channel.isSeries()) continue;
             groups.put(channel.group, groups.getOrDefault(channel.group, 0) + 1);
         }
         ArrayList<String> names = new ArrayList<>(groups.keySet());
@@ -355,6 +392,7 @@ public final class MainActivity extends Activity {
                 updateChips();
                 filterChannels();
             });
+            Ui.tvFocus(chip);
             chips.addView(chip, Ui.margins(this, -2, 34, 0, 0, 8, 0));
         }
     }
@@ -364,7 +402,9 @@ public final class MainActivity extends Activity {
         ArrayList<Channel> result = new ArrayList<>();
         for (Channel c : allChannels) {
             if ("Telewizja".equals(tab) && c.vod) continue;
-            if ("VOD".equals(tab) && !c.vod) continue;
+            if ("VOD".equals(tab) && !c.isMovie()) continue;
+            if ("Seriale".equals(tab) && !c.isSeries()) continue;
+            if ("Ostatnie".equals(tab) && c.isSeries() && c.id < 0) continue;
             if ("Ulubione".equals(tab) && !c.favorite) continue;
             if ("Ostatnie".equals(tab) && c.lastWatched == 0) continue;
             if (!ALL.equals(selectedGroup) &&
@@ -463,7 +503,14 @@ public final class MainActivity extends Activity {
                 XtreamClient.Credentials credentials = new XtreamClient.Credentials(
                         normalized, username, pass);
                 List<Channel> items = new XtreamClient(credentials).fetchChannels();
+                XtreamClient.Credentials oldAccount = null;
+                try { oldAccount = secure.credentials(); } catch (Exception ignored) { }
+                if (oldAccount != null && (!oldAccount.server.equals(normalized) ||
+                        !oldAccount.username.equals(username))) {
+                    database.deleteSource(ChannelDatabase.XTREAM);
+                }
                 database.replaceSource(ChannelDatabase.XTREAM, items);
+                database.savePlaylist(ChannelDatabase.XTREAM, "IPTV • " + normalized, "");
                 secure.saveServer(normalized, username, pass);
                 return "Pobrano " + items.size() + " pozycji TV i VOD";
             }, true);
@@ -483,6 +530,7 @@ public final class MainActivity extends Activity {
                         if (creds == null) throw new IllegalStateException("Brak zapisanego konta");
                         List<Channel> items = new XtreamClient(creds).fetchChannels();
                         database.replaceSource(ChannelDatabase.XTREAM, items);
+                        database.savePlaylist(ChannelDatabase.XTREAM, "IPTV • " + creds.server, "");
                         return "Odświeżono " + items.size() + " pozycji TV i VOD";
                     }, true)));
         }
@@ -540,7 +588,8 @@ public final class MainActivity extends Activity {
             if (guide.next != null && !guide.next.isEmpty()) {
                 item.addView(Ui.text(this, "Dalej: " + guide.next, 11, Ui.MUTED, false));
             }
-            item.setOnClickListener(v -> play(channel));
+            item.setOnClickListener(v -> openContent(channel));
+            Ui.tvFocus(item);
             page.addView(item, Ui.margins(this, -1, -2, 0, 5, 0, 0));
             if (++count >= 25) break;
         }
@@ -555,7 +604,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.1.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.2.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -563,6 +612,51 @@ public final class MainActivity extends Activity {
                 "serwera jest szyfrowane przez Android Keystore.",
                 12, Ui.ACCENT, false));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
+
+        LinearLayout playlistsCard = card();
+        playlistsCard.addView(Ui.text(this, "◈  Aktywna lista kanałów", 19, Ui.WHITE, true));
+        playlistsCard.addView(Ui.text(this, "Wybierz źródło do przeglądania i zmiany kanałów " +
+                "pilotem. Możesz też pokazywać wszystkie listy naraz.", 13, Ui.SECONDARY, false),
+                Ui.margins(this, -1, -2, 0, 7, 0, 12));
+        String active = secure.activeSource();
+        TextView everything = Ui.button(this,
+                (active.isEmpty() ? "✓  " : "◯  ") + "Wszystkie listy", active.isEmpty(), v -> {
+                    secure.setActiveSource("");
+                    showTab("Ustawienia");
+                    reloadData();
+                });
+        playlistsCard.addView(everything, Ui.margins(this, -1, -2, 0, 0, 0, 9));
+        List<ChannelDatabase.Playlist> sources = database.playlists();
+        for (ChannelDatabase.Playlist source : sources) {
+            boolean chosen = source.source.equals(active);
+            playlistsCard.addView(Ui.button(this, (chosen ? "✓  " : "◯  ") +
+                    source.title + "  (" + source.count + ")", chosen, v -> {
+                        secure.setActiveSource(source.source);
+                        showTab("Ustawienia");
+                        reloadData();
+                    }), Ui.margins(this, -1, -2, 0, 0, 0, 8));
+            playlistsCard.addView(Ui.button(this, "Usuń: " + source.title, false, v ->
+                    confirmDelete("Usunąć listę " + source.title + "?", () -> {
+                        database.deleteSource(source.source);
+                        if (source.file != null && !source.file.isEmpty()) {
+                            new java.io.File(getFilesDir(), source.file).delete();
+                        }
+                        if (source.source.equals(secure.activeSource())) secure.setActiveSource("");
+                        if (ChannelDatabase.XTREAM.equals(source.source)) secure.clearServer();
+                    })), Ui.margins(this, -1, -2, 0, 0, 0, 15));
+        }
+        if (sources.isEmpty()) playlistsCard.addView(Ui.text(this,
+                "Nie dodano jeszcze żadnej listy.", 12, Ui.MUTED, false));
+        page.addView(playlistsCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
+
+        LinearLayout remoteCard = card();
+        remoteCard.addView(Ui.text(this, "⌁  Pilot Android TV", 18, Ui.WHITE, true));
+        remoteCard.addView(Ui.text(this, "CH+/CH− lub ↑/↓: kanał. Cyfry 1–3: numer " +
+                "kanału (zatwierdź OK albo poczekaj). Czerwony: ♥. Zielony: OSD. " +
+                "Żółty: opis. Niebieski: ustawienia. Strzałki + OK obsługują " +
+                "przyciski ekranowe także bez kolorowych klawiszy.", 13,
+                Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 0));
+        page.addView(remoteCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout epgCard = card();
         epgCard.addView(Ui.text(this, "EPG • status źródeł", 19, Ui.WHITE, true));
@@ -584,16 +678,8 @@ public final class MainActivity extends Activity {
         actions.addView(Ui.text(this, "ZARZĄDZAJ DANYMI", 11, Ui.MUTED, true));
         actions.addView(Ui.button(this, "＋  Dodaj plik M3U lub konto IPTV", true,
                 v -> showTab("Źródła")), Ui.margins(this, -1, -2, 0, 12, 0, 12));
-        actions.addView(Ui.button(this, "Usuń listę M3U z urządzenia", false,
-                v -> confirmDelete("Usunąć lokalną playlistę M3U?", () -> {
-                    database.deleteSource(ChannelDatabase.M3U);
-                    new java.io.File(getFilesDir(), "playlist.m3u").delete();
-                })), Ui.margins(this, -1, -2, 0, 12, 0, 10));
-        actions.addView(Ui.button(this, "Usuń konto IPTV i jego kanały", false,
-                v -> confirmDelete("Usunąć zapisane konto i kanały IPTV?", () -> {
-                    database.deleteSource(ChannelDatabase.XTREAM);
-                    secure.clearServer();
-                })));
+        actions.addView(Ui.text(this, "Każdą listę możesz usunąć osobno w sekcji «Aktywna lista kanałów».",
+                12, Ui.SECONDARY, false));
         page.addView(actions);
 
         page.addView(Ui.text(this, "Wskazówka: korzystaj z legalnie udostępnionych " +
@@ -659,6 +745,26 @@ public final class MainActivity extends Activity {
         startActivity(intent);
     }
 
+    private void openContent(Channel channel) {
+        if (channel.isSeries() || channel.isEpisode() || channel.isMovie()) {
+            Intent intent = new Intent(this, VodDetailActivity.class);
+            intent.putExtra(VodDetailActivity.EXTRA_ID, channel.id);
+            if (channel.isEpisode() || channel.isSeries()) {
+                intent.putExtra(VodDetailActivity.EXTRA_SERIES, channel.seriesId);
+                intent.putExtra(VodDetailActivity.EXTRA_SOURCE, channel.source);
+            }
+            startActivity(intent);
+        } else play(channel);
+    }
+
+    @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_BLUE) {
+            showTab("Ustawienia".equals(tab) ? previousTab : "Ustawienia");
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
     private void confirmDelete(String title, Runnable operation) {
         new AlertDialog.Builder(this)
                 .setTitle(title)
@@ -706,16 +812,22 @@ public final class MainActivity extends Activity {
     private void toggleFavorite(Channel channel) {
         channel.favorite = !channel.favorite;
         boolean saved = channel.favorite;
-        io.execute(() -> database.setFavorite(channel.id, saved));
+        if (channel.id < 0 && channel.isSeries()) io.execute(() ->
+                database.setSeriesFavorite(channel.source, channel.seriesId, saved));
+        else io.execute(() -> database.setFavorite(channel.id, saved));
         filterChannels();
     }
 
     private String channelDescription(Channel channel, ChannelDatabase.Guide guide) {
         if (channel.vod) {
+            if (channel.isEpisode()) return "Sezon " + channel.season +
+                    " · odcinek " + channel.episode +
+                    (channel.playbackMs > 0 ? " · kontynuuj" : "");
             if (channel.playbackMs > 0)
                 return "▶ Kontynuuj od " + (channel.playbackMs / 60000) + " min";
             return "Film VOD • " + channel.group;
         }
+        if (channel.isSeries()) return "Serial • zobacz sezony i odcinki";
         if (guide != null && guide.current != null && !guide.current.isEmpty())
             return "● Teraz: " + guide.current;
         return channel.group + "  •  EPG w przygotowaniu";
@@ -749,6 +861,8 @@ public final class MainActivity extends Activity {
             name.setSingleLine(true);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             labels.addView(name);
+            if (!channel.vod && !channel.isSeries()) labels.addView(Ui.text(MainActivity.this,
+                    "Kanał " + (liveIndex(channel) + 1), 11, Ui.ACCENT, true));
             TextView group = Ui.text(MainActivity.this, channel.group, 11, Ui.MUTED, false);
             group.setSingleLine(true);
             labels.addView(group);
@@ -764,6 +878,7 @@ public final class MainActivity extends Activity {
             favorite.setGravity(Gravity.CENTER);
             favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             favorite.setOnClickListener(v -> toggleFavorite(channel));
+            Ui.tvFocus(favorite);
             row.addView(favorite, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 38),
                     Ui.dp(MainActivity.this, 50)));
             return row;
@@ -777,8 +892,10 @@ public final class MainActivity extends Activity {
 
             FrameLayout art = new FrameLayout(MainActivity.this);
             FrameLayout symbol = logo(channel, 100);
+            boolean poster = channel.vod || channel.isSeries();
             FrameLayout.LayoutParams center = new FrameLayout.LayoutParams(
-                    Ui.dp(MainActivity.this, 94), Ui.dp(MainActivity.this, 94), Gravity.CENTER);
+                    Ui.dp(MainActivity.this, poster ? 126 : 94),
+                    Ui.dp(MainActivity.this, poster ? 154 : 94), Gravity.CENTER);
             art.addView(symbol, center);
             TextView heart = Ui.text(MainActivity.this, channel.favorite ? "♥" : "♡", 25,
                     channel.favorite ? 0xFFFF728D : Ui.WHITE, false);
@@ -786,10 +903,12 @@ public final class MainActivity extends Activity {
             heart.setBackground(Ui.rounded(MainActivity.this, 0xD4142C42, 50));
             heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             heart.setOnClickListener(v -> toggleFavorite(channel));
+            Ui.tvFocus(heart);
             FrameLayout.LayoutParams heartParams = new FrameLayout.LayoutParams(
                     Ui.dp(MainActivity.this, 35), Ui.dp(MainActivity.this, 35), Gravity.RIGHT | Gravity.TOP);
             art.addView(heart, heartParams);
-            tile.addView(art, new LinearLayout.LayoutParams(-1, Ui.dp(MainActivity.this, 102)));
+            tile.addView(art, new LinearLayout.LayoutParams(-1, Ui.dp(MainActivity.this,
+                    poster ? 160 : 102)));
 
             TextView name = Ui.text(MainActivity.this, channel.name, 14, Ui.WHITE, true);
             name.setSingleLine(true);
@@ -800,7 +919,19 @@ public final class MainActivity extends Activity {
             desc.setMaxLines(2);
             desc.setEllipsize(android.text.TextUtils.TruncateAt.END);
             tile.addView(desc);
+            if (!poster) tile.addView(Ui.text(MainActivity.this,
+                    "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
             return tile;
         }
+    }
+
+    private int liveIndex(Channel target) {
+        int index = 0;
+        for (Channel item : allChannels) {
+            if (item.vod || item.isSeries() || item.isEpisode()) continue;
+            if (item.id == target.id) return index;
+            index++;
+        }
+        return index;
     }
 }

@@ -66,7 +66,19 @@ public final class Ui {
         button.setBackground(rounded(ctx, primary ? ACCENT : CARD, 13));
         button.setClickable(true);
         button.setOnClickListener(click);
+        tvFocus(button);
         return button;
+    }
+
+    /** Obrys i lekkie powiększenie dla fokusu pilota Android TV. */
+    public static <T extends View> T tvFocus(T view) {
+        view.setFocusable(true);
+        view.setOnFocusChangeListener((v, focused) -> {
+            v.setScaleX(focused ? 1.035f : 1f);
+            v.setScaleY(focused ? 1.035f : 1f);
+            v.setElevation(focused ? dp(v.getContext(), 8) : 0);
+        });
+        return view;
     }
 
     public static LinearLayout.LayoutParams margins(Context c, int width, int height,

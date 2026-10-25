@@ -13,6 +13,12 @@ public final class Channel {
     public long lastWatched;
     public long playbackMs;
     public long durationMs;
+    public String kind = "TV";
+    public String description = "";
+    public String seriesId = "";
+    public int season;
+    public int episode;
+    public int ordinal;
 
     public Channel(String name, String group, String tvgId, String logo, String url, String source) {
         this.name = clean(name, "Bez nazwy");
@@ -25,8 +31,13 @@ public final class Channel {
 
     public Channel asVod() {
         this.vod = true;
+        this.kind = "MOVIE";
         return this;
     }
+
+    public boolean isSeries() { return "SERIES".equals(kind); }
+    public boolean isEpisode() { return "EPISODE".equals(kind); }
+    public boolean isMovie() { return "MOVIE".equals(kind) || (vod && !isEpisode()); }
 
     private static String clean(String text, String fallback) {
         return text == null || text.trim().isEmpty() ? fallback : text.trim();

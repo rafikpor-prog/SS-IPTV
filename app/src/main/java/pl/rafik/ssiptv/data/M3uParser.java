@@ -18,6 +18,7 @@ public final class M3uParser {
     private M3uParser() {}
 
     private static final Pattern ATTRIBUTE = Pattern.compile("([a-zA-Z][a-zA-Z0-9-]*)\\s*=\\s*\"([^\"]*)\"");
+    private static final Pattern EPISODE = Pattern.compile("(?i)^(.+?)[ ._\\-]*[sS](\\d{1,2})[ ._\\-]*[eE](\\d{1,3})(?:\\b|[ ._\\-].*)$");
     public static final int MAX_CHANNELS = 50000;
 
     public static List<Channel> parse(InputStream input) throws IOException {
@@ -27,6 +28,7 @@ public final class M3uParser {
             String group = "Inne";
             String id = "";
             String logo = "";
+            String description = "";
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
@@ -38,6 +40,7 @@ public final class M3uParser {
                     if (comma >= 0) metadata = line.substring(0, comma);
                     id = attribute(metadata, "tvg-id");
                     logo = attribute(metadata, "tvg-logo");
+                    description = attribute(metadata, "tvg-description");
                     group = attribute(metadata, "group-title");
                     if (group.isEmpty()) group = "Inne";
                     if (name.isEmpty()) name = attribute(metadata, "tvg-name");
@@ -48,9 +51,19 @@ public final class M3uParser {
                             line.startsWith("rtsp://") || line.startsWith("udp://")) {
                         String display = name.isEmpty() ? "Kanał " + (result.size() + 1) : name;
                         Channel channel = new Channel(display, group, id, logo, line, "M3U");
+                        channel.description = description;
                         String category = group.toLowerCase(java.util.Locale.ROOT);
                         String streamPath = line.toLowerCase(java.util.Locale.ROOT).split("\\?", 2)[0];
-                        if (category.contains("vod") || category.contains("film") ||
+                        Matcher episodeName = EPISODE.matcher(display);
+                        if (episodeName.matches() && (category.contains("serial") ||
+                                category.contains("series") || category.contains("vod") ||
+                                streamPath.endsWith(".mp4") || streamPath.endsWith(".mkv"))) {
+                            channel.vod = true;
+                            channel.kind = "EPISODE";
+                            channel.seriesId = episodeName.group(1).trim().replace('.', ' ');
+                            channel.season = Integer.parseInt(episodeName.group(2));
+                            channel.episode = Integer.parseInt(episodeName.group(3));
+                        } else if (category.contains("vod") || category.contains("film") ||
                                 category.contains("movie") || category.contains("kino") ||
                                 streamPath.endsWith(".mp4") || streamPath.endsWith(".mkv") ||
                                 streamPath.endsWith(".avi")) channel.asVod();
@@ -63,6 +76,7 @@ public final class M3uParser {
                     group = "Inne";
                     id = "";
                     logo = "";
+                    description = "";
                 }
             }
         }

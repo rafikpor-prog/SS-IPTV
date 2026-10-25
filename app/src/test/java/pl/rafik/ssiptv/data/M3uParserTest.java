@@ -53,4 +53,24 @@ public final class M3uParserTest {
         assertTrue(items.get(0).vod);
         assertFalse(items.get(1).vod);
     }
+
+    @Test public void groupsSeriesEpisodesIntoSeasonsAndKeepsDescriptions() throws Exception {
+        String fixture = "#EXTM3U\n" +
+                "#EXTINF:-1 group-title=\"Seriale\" tvg-logo=\"https://example.org/cover.jpg\" " +
+                "tvg-description=\"Opis pierwszego odcinka\",Przykładowy Serial S01E02 Odcinek 2\n" +
+                "https://example.org/serial/s01e02.mp4\n" +
+                "#EXTINF:-1 group-title=\"Seriale\",Przykładowy Serial S02E01 Odcinek 1\n" +
+                "https://example.org/serial/s02e01.mp4\n";
+        List<Channel> items = M3uParser.parse(new ByteArrayInputStream(
+                fixture.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(2, items.size());
+        assertTrue(items.get(0).isEpisode());
+        assertEquals("Przykładowy Serial", items.get(0).seriesId);
+        assertEquals(1, items.get(0).season);
+        assertEquals(2, items.get(0).episode);
+        assertEquals(2, items.get(1).season);
+        assertEquals(1, items.get(1).episode);
+        assertEquals("Opis pierwszego odcinka", items.get(0).description);
+        assertEquals("https://example.org/cover.jpg", items.get(0).logo);
+    }
 }

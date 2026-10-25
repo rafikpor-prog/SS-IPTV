@@ -81,6 +81,15 @@ public final class SecureSettings {
         prefs.edit().remove("server").remove("username").remove("password").apply();
     }
 
+    /** Pusta wartość oznacza jednoczesny widok wszystkich lokalnych list. */
+    public String activeSource() {
+        return prefs.getString("active_source", "");
+    }
+
+    public void setActiveSource(String source) {
+        prefs.edit().putString("active_source", source == null ? "" : source).apply();
+    }
+
     public long lastSync() {
         return prefs.getLong("epg_last_sync", 0);
     }

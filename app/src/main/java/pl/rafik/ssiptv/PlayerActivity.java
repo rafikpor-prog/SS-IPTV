@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.KeyEvent;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -16,6 +17,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ScrollView;
 
 import androidx.annotation.Nullable;
 import androidx.media3.common.MediaItem;
@@ -30,6 +32,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -54,6 +58,15 @@ public final class PlayerActivity extends Activity {
     private Channel channel;
     private ChannelDatabase database;
     private LinearLayout osd;
+    private FrameLayout root;
+    private PlayerView playerView;
+    private ScrollView settingsPanel;
+    private TextView expandedDescription;
+    private ScrollView descriptionScroll;
+    private TextView numberOverlay;
+    private boolean descriptionOpen;
+    private final StringBuilder numberInput = new StringBuilder();
+    private final Runnable commitNumber = this::commitChannelNumber;
     private TextView heart;
     private TextView quality;
     private TextView progress;
@@ -87,10 +100,10 @@ public final class PlayerActivity extends Activity {
         }
         storage.execute(() -> database.markWatched(channel.id));
 
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         setContentView(root);
-        PlayerView playerView = new PlayerView(this);
+        playerView = new PlayerView(this);
         playerView.setUseController(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS);
         playerView.setOnTouchListener((v, event) -> {
@@ -109,6 +122,17 @@ public final class PlayerActivity extends Activity {
                 Ui.dp(this, 42), Ui.dp(this, 42), Gravity.RIGHT | Gravity.BOTTOM);
         infoParams.setMargins(0, 0, Ui.dp(this, 14), Ui.dp(this, 14));
         root.addView(info, infoParams);
+
+        numberOverlay = Ui.text(this, "", 34, Ui.WHITE, true);
+        numberOverlay.setGravity(Gravity.CENTER);
+        numberOverlay.setPadding(Ui.dp(this, 20), Ui.dp(this, 12),
+                Ui.dp(this, 20), Ui.dp(this, 12));
+        numberOverlay.setBackground(Ui.rounded(this, 0xEE102D43, 17));
+        FrameLayout.LayoutParams digitParams = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        digitParams.setMargins(0, 0, Ui.dp(this, 34), 0);
+        root.addView(numberOverlay, digitParams);
+        numberOverlay.setVisibility(View.GONE);
 
         try {
             String stream = channel.url;
@@ -129,7 +153,7 @@ public final class PlayerActivity extends Activity {
                 }
             }
             DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                    .setUserAgent("SS-IPTV/1.1 Android")
+                    .setUserAgent("SS-IPTV/1.2 Android TV")
                     .setConnectTimeoutMs(15000)
                     .setReadTimeoutMs(20000)
                     .setAllowCrossProtocolRedirects(true);
@@ -139,6 +163,7 @@ public final class PlayerActivity extends Activity {
                             new DefaultDataSource.Factory(this, http)))
                     .build();
             playerView.setPlayer(player);
+            playerView.requestFocus();
             MediaItem.Builder media = new MediaItem.Builder().setUri(stream);
             String path = stream.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
             if (path.endsWith(".m3u8")) media.setMimeType(MimeTypes.APPLICATION_M3U8);
@@ -234,17 +259,34 @@ public final class PlayerActivity extends Activity {
                 channel.favorite ? 0xFFFF728D : Ui.WHITE, false);
         heart.setGravity(Gravity.CENTER);
         heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-        heart.setOnClickListener(v -> {
-            channel.favorite = !channel.favorite;
-            heart.setText(channel.favorite ? "♥" : "♡");
-            heart.setTextColor(channel.favorite ? 0xFFFF728D : Ui.WHITE);
-            heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-            boolean chosen = channel.favorite;
-            storage.execute(() -> database.setFavorite(channel.id, chosen));
-            showOsd();
-        });
+        heart.setOnClickListener(v -> toggleFavorite());
+        Ui.tvFocus(heart);
         details.addView(heart, new LinearLayout.LayoutParams(Ui.dp(this, 52), Ui.dp(this, 60)));
         osd.addView(details);
+
+        expandedDescription = Ui.text(this, "", 13, Ui.WHITE, false);
+        expandedDescription.setPadding(Ui.dp(this, 10), Ui.dp(this, 10),
+                Ui.dp(this, 10), Ui.dp(this, 10));
+        expandedDescription.setBackground(Ui.rounded(this, 0xEC143A51, 11));
+        descriptionScroll = new ScrollView(this);
+        descriptionScroll.setFillViewport(false);
+        descriptionScroll.setFocusable(true);
+        descriptionScroll.addView(expandedDescription);
+        descriptionScroll.setVisibility(View.GONE);
+        osd.addView(descriptionScroll, Ui.margins(this, -1, 140, 0, 9, 0, 3));
+
+        LinearLayout actions = Ui.row(this);
+        actions.setPadding(0, Ui.dp(this, 12), 0, 0);
+        addColorAction(actions, "●  Ulubione", 0xFFA93544, v -> toggleFavorite());
+        addColorAction(actions, "●  OSD", 0xFF1F8155, v -> toggleOsd());
+        addColorAction(actions, "●  Opis", 0xFFB38B15, v -> toggleDescription());
+        addColorAction(actions, "●  Ustawienia", 0xFF215EAA, v -> toggleSettings());
+        osd.addView(actions);
+
+        osd.addView(Ui.text(this,
+                "CH+/CH− lub ↑↓ kanały  •  1–3 cyfry numer kanału  •  OK: zatwierdź  •  " +
+                "strzałki + OK: sterowanie OSD", 10, Ui.SECONDARY, false),
+                Ui.margins(this, -1, -2, 0, 10, 0, 0));
 
         FrameLayout.LayoutParams osdParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         root.addView(osd, osdParams);
@@ -268,7 +310,236 @@ public final class PlayerActivity extends Activity {
         osd.setVisibility(View.VISIBLE);
         updateProgressLabel();
         handler.removeCallbacks(hideOsd);
-        handler.postDelayed(hideOsd, 8500);
+        if (!descriptionOpen) handler.postDelayed(hideOsd, 8500);
+    }
+
+    private void addColorAction(LinearLayout actions, String label, int background,
+                                View.OnClickListener listener) {
+        TextView button = Ui.text(this, label, 12, Ui.WHITE, true);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(Ui.dp(this, 8), Ui.dp(this, 11), Ui.dp(this, 8), Ui.dp(this, 11));
+        button.setBackground(Ui.rounded(this, background, 9));
+        button.setOnClickListener(listener);
+        Ui.tvFocus(button);
+        actions.addView(button, new LinearLayout.LayoutParams(0, Ui.dp(this, 43), 1));
+    }
+
+    private void toggleFavorite() {
+        channel.favorite = !channel.favorite;
+        boolean value = channel.favorite;
+        heart.setText(value ? "♥" : "♡");
+        heart.setTextColor(value ? 0xFFFF728D : Ui.WHITE);
+        heart.setContentDescription(value ? "Usuń z ulubionych" : "Dodaj do ulubionych");
+        storage.execute(() -> database.setFavorite(channel.id, value));
+        showOsd();
+    }
+
+    private void toggleOsd() {
+        if (osd == null) return;
+        if (osd.getVisibility() == View.VISIBLE) {
+            osd.setVisibility(View.GONE);
+            handler.removeCallbacks(hideOsd);
+        } else showOsd();
+    }
+
+    private void toggleDescription() {
+        descriptionOpen = !descriptionOpen;
+        if (expandedDescription != null) {
+            if (descriptionOpen) {
+                ChannelDatabase.Guide guide = database.readGuides().get(channel.id);
+                String title = channel.vod ? channel.name : guide != null ? guide.current : channel.name;
+                String body = channel.vod ? channel.description :
+                        guide != null ? guide.description : "";
+                if (body == null || body.trim().isEmpty()) body =
+                        "Dostawca nie przekazał szczegółowego opisu tej pozycji.";
+                expandedDescription.setText(title + "\n\n" + body);
+                descriptionScroll.setVisibility(View.VISIBLE);
+                descriptionScroll.requestFocus();
+            } else descriptionScroll.setVisibility(View.GONE);
+        }
+        showOsd();
+    }
+
+    /** Boczny panel działa także pilotem bez niebieskiego klawisza. */
+    private void toggleSettings() {
+        if (settingsPanel != null) {
+            root.removeView(settingsPanel);
+            settingsPanel = null;
+            return;
+        }
+        settingsPanel = new ScrollView(this);
+        settingsPanel.setFillViewport(false);
+        settingsPanel.setVerticalScrollBarEnabled(false);
+        LinearLayout settingsBody = Ui.column(this);
+        settingsBody.setPadding(Ui.dp(this, 17), Ui.dp(this, 17),
+                Ui.dp(this, 17), Ui.dp(this, 17));
+        settingsPanel.addView(settingsBody);
+        settingsPanel.setBackground(Ui.outlined(this, 0xF20D263A, Ui.ACCENT, 18));
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                Math.min(Ui.dp(this, 350),
+                        getResources().getDisplayMetrics().widthPixels - Ui.dp(this, 36)),
+                Math.min(Ui.dp(this, 520),
+                        getResources().getDisplayMetrics().heightPixels - Ui.dp(this, 42)),
+                Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        params.setMargins(Ui.dp(this, 10), Ui.dp(this, 20), Ui.dp(this, 18), Ui.dp(this, 20));
+        root.addView(settingsPanel, params);
+        settingsBody.addView(Ui.text(this, "⚙  Ustawienia odtwarzania", 19, Ui.WHITE, true));
+        settingsBody.addView(Ui.text(this, "Wybierz aktywną listę • EPG • sterowanie",
+                12, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 12));
+        SecureSettings settings = new SecureSettings(this);
+        settingsBody.addView(Ui.text(this, settings.epgStatus(), 12, Ui.ACCENT, false));
+        String active = settings.activeSource();
+        settingsBody.addView(Ui.button(this, active.isEmpty() ?
+                "✓  Wszystkie listy" : "◯  Wszystkie listy", active.isEmpty(), v -> {
+            settings.setActiveSource("");
+            toggleSettings();
+            toggleSettings();
+        }), Ui.margins(this, -1, -2, 0, 13, 0, 5));
+        for (ChannelDatabase.Playlist source : database.playlists()) {
+            boolean selected = source.source.equals(active);
+            settingsBody.addView(Ui.button(this, (selected ? "✓  " : "◯  ") +
+                    source.title, selected, v -> {
+                settings.setActiveSource(source.source);
+                toggleSettings();
+                toggleSettings();
+            }), Ui.margins(this, -1, -2, 0, 0, 0, 5));
+        }
+        settingsBody.addView(Ui.button(this, "Zamknij  ✕", false, v -> toggleSettings()),
+                Ui.margins(this, -1, -2, 0, 12, 0, 0));
+        settingsBody.getChildAt(settingsBody.getChildCount()-1).requestFocus();
+        showOsd();
+    }
+
+    private List<Channel> liveChannels() {
+        List<Channel> result = new ArrayList<>();
+        String active = new SecureSettings(this).activeSource();
+        for (Channel item : database.allChannels()) {
+            if (!item.vod && !item.isSeries() && !item.isEpisode() &&
+                    (active.isEmpty() || active.equals(item.source))) result.add(item);
+        }
+        return result;
+    }
+
+    private void zap(int direction) {
+        if (channel.vod) return;
+        List<Channel> tv = liveChannels();
+        if (tv.isEmpty()) return;
+        int current = -1;
+        for (int i = 0; i < tv.size(); i++) if (tv.get(i).id == channel.id) {
+            current = i;
+            break;
+        }
+        int next = (current + direction + tv.size()) % tv.size();
+        switchTo(tv.get(next));
+    }
+
+    private void switchTo(Channel target) {
+        if (target.id == channel.id) { showOsd(); return; }
+        if (player != null) player.stop();
+        android.content.Intent intent = new android.content.Intent(this, PlayerActivity.class);
+        intent.putExtra(EXTRA_ID, target.id);
+        startActivity(intent);
+        overridePendingTransition(0, 0);
+        finish();
+    }
+
+    private void typeDigit(int digit) {
+        if (channel.vod) return;
+        if (numberInput.length() >= 3) numberInput.setLength(0);
+        numberInput.append(digit);
+        numberOverlay.setText(numberInput.toString());
+        numberOverlay.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(commitNumber);
+        if (numberInput.length() == 3) handler.postDelayed(commitNumber, 300);
+        else handler.postDelayed(commitNumber, 1600);
+    }
+
+    /** Najpierw przechwytujemy skróty TV, bo wewnętrzny PlayerView może połykać klawisze. */
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            int key = event.getKeyCode();
+            boolean shortcut = (key >= KeyEvent.KEYCODE_0 && key <= KeyEvent.KEYCODE_9) ||
+                    (key >= KeyEvent.KEYCODE_NUMPAD_0 && key <= KeyEvent.KEYCODE_NUMPAD_9) ||
+                    key == KeyEvent.KEYCODE_PROG_RED || key == KeyEvent.KEYCODE_PROG_GREEN ||
+                    key == KeyEvent.KEYCODE_PROG_YELLOW || key == KeyEvent.KEYCODE_PROG_BLUE ||
+                    key == KeyEvent.KEYCODE_CHANNEL_UP || key == KeyEvent.KEYCODE_CHANNEL_DOWN ||
+                    key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN ||
+                    (numberInput.length() > 0 && (key == KeyEvent.KEYCODE_DPAD_CENTER ||
+                            key == KeyEvent.KEYCODE_ENTER));
+            if (shortcut && onKeyDown(key, event)) return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    private void commitChannelNumber() {
+        if (numberInput.length() == 0) return;
+        int ordinal;
+        try { ordinal = Integer.parseInt(numberInput.toString()); }
+        catch (NumberFormatException error) { ordinal = 0; }
+        numberInput.setLength(0);
+        numberOverlay.setVisibility(View.GONE);
+        List<Channel> channels = liveChannels();
+        if (ordinal > 0 && ordinal <= channels.size()) switchTo(channels.get(ordinal - 1));
+        else Toast.makeText(this, "Brak kanału nr " + ordinal, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (event.getRepeatCount() == 0) {
+            if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
+                typeDigit(keyCode - KeyEvent.KEYCODE_0);
+                return true;
+            }
+            if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) {
+                typeDigit(keyCode - KeyEvent.KEYCODE_NUMPAD_0);
+                return true;
+            }
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_PROG_RED: toggleFavorite(); return true;
+                case KeyEvent.KEYCODE_PROG_GREEN: toggleOsd(); return true;
+                case KeyEvent.KEYCODE_PROG_YELLOW: toggleDescription(); return true;
+                case KeyEvent.KEYCODE_PROG_BLUE: toggleSettings(); return true;
+                case KeyEvent.KEYCODE_CHANNEL_UP: zap(1); return true;
+                case KeyEvent.KEYCODE_CHANNEL_DOWN: zap(-1); return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (settingsPanel == null && !channel.vod &&
+                            !(descriptionOpen && descriptionScroll.hasFocus())) { zap(1); return true; }
+                    break;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (settingsPanel == null && !channel.vod &&
+                            !(descriptionOpen && descriptionScroll.hasFocus())) { zap(-1); return true; }
+                    break;
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                    if (numberInput.length() > 0) { commitChannelNumber(); return true; }
+                    if (osd.getVisibility() != View.VISIBLE && settingsPanel == null) {
+                        showOsd();
+                        heart.requestFocus();
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    if (settingsPanel == null && osd.getVisibility() != View.VISIBLE) {
+                        showOsd();
+                        heart.requestFocus();
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    if (settingsPanel == null && osd.getVisibility() != View.VISIBLE) {
+                        toggleDescription();
+                        heart.requestFocus();
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_BACK:
+                    if (settingsPanel != null) { toggleSettings(); return true; }
+                    if (descriptionOpen) { toggleDescription(); return true; }
+                    if (osd.getVisibility() == View.VISIBLE) { toggleOsd(); return true; }
+                    break;
+                default: break;
+            }
+        }
+        return super.onKeyDown(keyCode, event);
     }
 
     private void updateProgressLabel() {

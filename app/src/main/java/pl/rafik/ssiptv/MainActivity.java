@@ -28,6 +28,7 @@ import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.Log;
 
 import java.text.DateFormat;
 import java.util.ArrayList;
@@ -53,6 +54,7 @@ import pl.rafik.ssiptv.ui.LogoLoader;
 /** Ekrany główne SS-IPTV. Cały interfejs jest natywny i działa bez WebView. */
 public final class MainActivity extends Activity {
     private static final int PICK_PLAYLIST = 4301;
+    private static final String TAG = "SS-IPTV-Import";
     private static final String ALL = "Wszystkie";
     private static final String FAVORITES = "Ulubione";
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -88,6 +90,7 @@ public final class MainActivity extends Activity {
         reloadData();
         EpgSync.schedule(this);
         EpgSync.refreshIfStale(this);
+        if (state == null) handleExternalPlaylist(getIntent());
     }
 
     @Override protected void onResume() {
@@ -455,13 +458,14 @@ public final class MainActivity extends Activity {
         m3u.addView(Ui.text(this, "◈  Playlista M3U", 19, Ui.WHITE, true));
         m3u.addView(Ui.text(this, "Import z pamięci telefonu lub z własnego linku. Kategorie są odczytywane automatycznie.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
-        TextView importButton = Ui.button(this, "Wybierz plik M3U  ＋", true, v -> {
-            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            picker.setType("*/*");
-            picker.addCategory(Intent.CATEGORY_OPENABLE);
-            startActivityForResult(picker, PICK_PLAYLIST);
-        });
+        TextView importButton = Ui.button(this, "Wybierz plik M3U  ＋", true,
+                v -> choosePlaylistFile(false));
         m3u.addView(importButton, Ui.margins(this, -1, -2, 0, 3, 0, 12));
+        m3u.addView(Ui.button(this, "Android Box: alternatywny wybór pliku", false,
+                v -> choosePlaylistFile(true)), Ui.margins(this, -1, -2, 0, 0, 0, 10));
+        m3u.addView(Ui.text(this, "Możesz też otworzyć plik .m3u w menedżerze plików, " +
+                "wybrać «Otwórz za pomocą» i wskazać SS-IPTV.", 12, Ui.SECONDARY, false),
+                Ui.margins(this, -1, -2, 0, 0, 0, 13));
         m3u.addView(Ui.text(this, "LUB WKLEJ ADRES PLAYLISTY", 10, Ui.MUTED, true));
         EditText m3uUrl = input("https://twoj-serwer/lista.m3u", false);
         m3uUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -604,7 +608,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.2.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.2.1", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -782,16 +786,122 @@ public final class MainActivity extends Activity {
                 }).show();
     }
 
+    /** Na części Android Boxów nie ma DocumentsUI — wybór pliku nie może kończyć aplikacji. */
+    private void choosePlaylistFile(boolean alternate) {
+        ArrayList<Intent> candidates = new ArrayList<>();
+        if (alternate) {
+            candidates.add(filePicker(Intent.ACTION_OPEN_DOCUMENT, true));
+            candidates.add(filePicker(Intent.ACTION_GET_CONTENT, true));
+            candidates.add(filePicker(Intent.ACTION_GET_CONTENT, false));
+        } else {
+            // ACTION_GET_CONTENT częściej obsługują menedżery plików z Android Boxów.
+            candidates.add(filePicker(Intent.ACTION_GET_CONTENT, false));
+            candidates.add(filePicker(Intent.ACTION_GET_CONTENT, true));
+            candidates.add(filePicker(Intent.ACTION_OPEN_DOCUMENT, true));
+        }
+        for (Intent candidate : candidates) {
+            try {
+                startActivityForResult(candidate, PICK_PLAYLIST);
+                return;
+            } catch (RuntimeException failure) {
+                Log.w(TAG, "Brak dostępnego wyboru plików: " + candidate.getAction(), failure);
+            }
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Brak menedżera wyboru plików")
+                .setMessage("Android Box nie ma aplikacji obsługującej wybór plików. " +
+                        "Zainstaluj menedżer plików obsługujący «Otwórz za pomocą», " +
+                        "a następnie otwórz w nim plik M3U przez SS-IPTV. " +
+                        "Możesz również dodać playlistę przez jej adres URL.")
+                .setPositiveButton("Rozumiem", null)
+                .show();
+    }
+
+    private Intent filePicker(String action, boolean openable) {
+        Intent intent = new Intent(action);
+        intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        if (openable) intent.addCategory(Intent.CATEGORY_OPENABLE);
+        return intent;
+    }
+
+    /** Import po wybraniu SS-IPTV w oknie „Otwórz za pomocą” menedżera plików. */
+    private void handleExternalPlaylist(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_SEND.equals(action)) return;
+        Uri uri = Intent.ACTION_VIEW.equals(action) ? intent.getData() :
+                intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (uri == null && intent.getClipData() != null &&
+                intent.getClipData().getItemCount() > 0)
+            uri = intent.getClipData().getItemAt(0).getUri();
+        if (uri == null) return;
+        String scheme = uri.getScheme();
+        if (!("content".equalsIgnoreCase(scheme) || "file".equalsIgnoreCase(scheme))) {
+            toast("Otwieranie pliku wymaga adresu content:// lub file://");
+            return;
+        }
+        String title = externalFileName(uri);
+        String type = intent.getType();
+        if (type != null && type.toLowerCase(Locale.ROOT).startsWith("video/") &&
+                !title.toLowerCase(Locale.ROOT).endsWith(".m3u")) {
+            Intent player = new Intent(this, PlayerActivity.class);
+            player.putExtra(PlayerActivity.EXTRA_EXTERNAL_URI, uri.toString());
+            player.putExtra(PlayerActivity.EXTRA_EXTERNAL_NAME, title);
+            player.setData(uri);
+            player.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(player);
+            return;
+        }
+        Uri selected = uri;
+        showTab("Źródła");
+        new AlertDialog.Builder(this)
+                .setTitle("Dodać playlistę M3U?")
+                .setMessage("SS-IPTV zaimportuje wskazaną listę do prywatnej pamięci " +
+                        "aplikacji. Dotychczasowe listy pozostaną dostępne.")
+                .setNegativeButton("Anuluj", null)
+                .setPositiveButton("Importuj", (dialog, which) -> importPlaylistUri(selected))
+                .show();
+    }
+
+    private String externalFileName(Uri uri) {
+        String name = uri.getLastPathSegment();
+        if (name == null || name.trim().isEmpty()) name = "Zewnętrzne wideo";
+        try (android.database.Cursor cursor = getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String label = cursor.getString(0);
+                if (label != null && !label.trim().isEmpty()) name = label;
+            }
+        } catch (RuntimeException ignored) { /* Menedżer plików może nie obsługiwać metadanych. */ }
+        return name;
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleExternalPlaylist(intent);
+    }
+
+    private void importPlaylistUri(Uri uri) {
+        performTask("Importowanie pliku M3U…", () -> {
+            int amount = PlaylistLoader.importDocument(getApplicationContext(), uri).size();
+            return "Zaimportowano " + amount + " kanałów";
+        }, true);
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_PLAYLIST && resultCode == RESULT_OK &&
-                data != null && data.getData() != null) {
-            Uri uri = data.getData();
-            performTask("Importowanie pliku M3U…", () -> {
-                int amount = PlaylistLoader.importDocument(getApplicationContext(), uri).size();
-                return "Zaimportowano " + amount + " kanałów";
-            }, true);
+        if (requestCode != PICK_PLAYLIST || resultCode != RESULT_OK) return;
+        Uri uri = data == null ? null : data.getData();
+        if (uri == null && data != null && data.getClipData() != null &&
+                data.getClipData().getItemCount() > 0)
+            uri = data.getClipData().getItemAt(0).getUri();
+        if (uri == null) {
+            toast("Menedżer plików nie zwrócił pliku. Wypróbuj alternatywny wybór.");
+            return;
         }
+        importPlaylistUri(uri);
     }
 
     private FrameLayout logo(Channel channel, int size) {
@@ -857,9 +967,10 @@ public final class MainActivity extends Activity {
 
             LinearLayout labels = Ui.column(MainActivity.this);
             labels.setPadding(Ui.dp(MainActivity.this, 12), 0, Ui.dp(MainActivity.this, 5), 0);
-            TextView name = Ui.text(MainActivity.this, channel.name, 15, Ui.WHITE, true);
-            name.setSingleLine(true);
+            TextView name = Ui.text(MainActivity.this, channel.name, 16, Ui.WHITE, true);
+            name.setMaxLines(3);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            name.setContentDescription("Nazwa kanału: " + channel.name);
             labels.addView(name);
             if (!channel.vod && !channel.isSeries()) labels.addView(Ui.text(MainActivity.this,
                     "Kanał " + (liveIndex(channel) + 1), 11, Ui.ACCENT, true));
@@ -910,10 +1021,15 @@ public final class MainActivity extends Activity {
             tile.addView(art, new LinearLayout.LayoutParams(-1, Ui.dp(MainActivity.this,
                     poster ? 160 : 102)));
 
-            TextView name = Ui.text(MainActivity.this, channel.name, 14, Ui.WHITE, true);
-            name.setSingleLine(true);
+            TextView name = Ui.text(MainActivity.this, channel.name, 15, Ui.WHITE, true);
+            name.setMaxLines(3);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            tile.addView(name, Ui.margins(MainActivity.this, -1, -2, 0, 7, 0, 2));
+            name.setMinHeight(Ui.dp(MainActivity.this, 46));
+            name.setPadding(Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 6),
+                    Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 6));
+            name.setBackground(Ui.rounded(MainActivity.this, Ui.CARD, 9));
+            name.setContentDescription("Nazwa kanału: " + channel.name);
+            tile.addView(name, Ui.margins(MainActivity.this, -1, -2, 0, 7, 0, 6));
             TextView desc = Ui.text(MainActivity.this, channelDescription(channel, guide),
                     11, Ui.ACCENT, false);
             desc.setMaxLines(2);

@@ -2,7 +2,7 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.2.0
+## Funkcje 1.2.1
 
 - Import pliku Extended M3U przez systemowy wybór pliku albo pobranie playlisty z URL.
 - Każdy kolejny import M3U tworzy **oddzielną listę** z własnym plikiem w prywatnej pamięci urządzenia; poprzednie listy i ulubione nie są usuwane. W ustawieniach można wybrać aktywną listę albo połączyć widok wszystkich list.
@@ -24,6 +24,9 @@ Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. 
 - Pilot podczas odtwarzania telewizji: **CH+/CH− i ↑/↓** zmiana kanału; numery **1–3 cyfry** + OK (lub 1,6 s bezczynności) wybierają kolejny numer pozycji na aktywnej liście. **Czerwony** włącza/wyłącza ulubione, **zielony** pokazuje/ukrywa OSD, **żółty** rozwija/zwija opis, **niebieski** pokazuje/ukrywa panel ustawień oraz wyboru listy.
 - Dla pilotów bez kolorów: **OK** otwiera OSD, **←** odsłania przyciski ekranowe, **→** otwiera opis; w OSD przyciski kolorów dostępne są poprzez nawigację strzałkami i OK. **Wstecz** zamyka panele przed opuszczeniem odtwarzania. W VOD sterowanie natywnym panelem odtwarzacza Media3 pozostaje dostępne.
 - EPG XMLTV zapamiętuje także opis aktualnie emitowanego programu, wykorzystywany w rozszerzonym OSD.
+- Android Box: wybór pliku M3U korzysta z kilku zgodnych z systemem sposobów uruchamiania menedżera plików (`ACTION_GET_CONTENT` i `ACTION_OPEN_DOCUMENT`). Brak odpowiedniej aplikacji na urządzeniu wywołuje komunikat z rozwiązaniem zamiast nieobsłużonego wyjątku.
+- SS-IPTV pojawia się w systemowym menu **„Otwórz za pomocą”** dla typowych typów MIME playlist M3U oraz filmów `video/*`. Otwarta lista M3U jest importowana po potwierdzeniu; zwykły plik wideo trafia bezpośrednio do odtwarzacza.
+- Nazwy kanałów są widoczne w osobnych polach tekstowych poza obszarem logo na liście, kafelkach i OSD. Długie nazwy mogą zajmować kilka wierszy.
 
 ## Budowanie
 
@@ -35,7 +38,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.2.0 ma versionCode 3 i jest podpisywana tym samym kluczem co 1.0.0 i 1.1.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.2.1 ma versionCode 4 i jest podpisywana tym samym kluczem co 1.0.0–1.2.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \
@@ -55,6 +58,8 @@ Uwaga: parametry wiersza poleceń mogą być widoczne w historii terminala; w au
 - Brak synchronizacji pomiędzy urządzeniami: listy i ulubione pozostają wyłącznie lokalnie.
 - Nie testowano wszystkich serwerów Xtream. Niektóre niestandardowe odmiany API mogą wymagać dostosowania.
 - Kompletne zachowanie pilotów, w szczególności mapowanie kolorowych przycisków przez producentów TV, wymaga sprawdzenia na urządzeniu. W testach projektu uruchomiono lokalne testy JVM i kompilację Android, ale nie testy rzeczywistego sprzętu i dostawcy Xtream.
+- Systemowy wybór domyślnej aplikacji zależy od menedżera plików i typu MIME, który ten menedżer przypisuje do M3U. SS-IPTV nie wymusza ustawienia się jako domyślny odtwarzacz i nie przechwytuje wszystkich dokumentów urządzenia.
+- Filmy otwierane jednorazowo z zewnętrznego menedżera plików nie są automatycznie dodawane do bazy list; trwała historia i postęp VOD dotyczą materiałów zaimportowanych do biblioteki.
 
 ## Rozwój
 

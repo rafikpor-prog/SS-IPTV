@@ -52,6 +52,8 @@ import pl.rafik.ssiptv.ui.Ui;
  */
 public final class PlayerActivity extends Activity {
     public static final String EXTRA_ID = "channel_id";
+    public static final String EXTRA_EXTERNAL_URI = "external_video_uri";
+    public static final String EXTRA_EXTERNAL_NAME = "external_video_name";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService storage = Executors.newSingleThreadExecutor();
     private ExoPlayer player;
@@ -94,11 +96,21 @@ public final class PlayerActivity extends Activity {
             if (item.id == id) { channel = item; break; }
         }
         if (channel == null) {
+            String externalUri = getIntent().getStringExtra(EXTRA_EXTERNAL_URI);
+            if (externalUri != null && !externalUri.isEmpty() &&
+                    (externalUri.startsWith("content://") || externalUri.startsWith("file://") ||
+                            externalUri.startsWith("https://") || externalUri.startsWith("http://"))) {
+                channel = new Channel(getIntent().getStringExtra(EXTRA_EXTERNAL_NAME),
+                        "Wideo zewnętrzne", "", "", externalUri, "EXTERNAL").asVod();
+                channel.id = -1;
+            }
+        }
+        if (channel == null) {
             Toast.makeText(this, "Nie znaleziono kanału lub filmu", Toast.LENGTH_LONG).show();
             finish();
             return;
         }
-        storage.execute(() -> database.markWatched(channel.id));
+        if (channel.id > 0) storage.execute(() -> database.markWatched(channel.id));
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -177,7 +189,7 @@ public final class PlayerActivity extends Activity {
                     showQuality(Math.min(size.width, size.height));
                 }
                 @Override public void onPlaybackStateChanged(int state) {
-                    if (state == Player.STATE_ENDED && channel.vod) {
+                    if (state == Player.STATE_ENDED && channel.vod && channel.id > 0) {
                         storage.execute(() -> database.savePlayback(channel.id, 0, 0));
                     }
                 }
@@ -239,8 +251,11 @@ public final class PlayerActivity extends Activity {
         LinearLayout labels = Ui.column(this);
         labels.setPadding(Ui.dp(this, 15), 0, 0, 0);
         TextView name = Ui.text(this, channel.name, 21, Ui.WHITE, true);
-        name.setSingleLine(true);
+        name.setMaxLines(3);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        name.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4));
+        name.setBackground(Ui.rounded(this, 0xCC133C55, 8));
+        name.setContentDescription("Nazwa kanału: " + channel.name);
         labels.addView(name);
         ChannelDatabase.Guide guide = database.readGuides().get(channel.id);
         String now = channel.vod ? "Odtwarzany film VOD" :
@@ -325,6 +340,11 @@ public final class PlayerActivity extends Activity {
     }
 
     private void toggleFavorite() {
+        if (channel.id <= 0) {
+            Toast.makeText(this, "Ulubione działają dla kanałów zapisanych na liście.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
         channel.favorite = !channel.favorite;
         boolean value = channel.favorite;
         heart.setText(value ? "♥" : "♡");
@@ -565,7 +585,7 @@ public final class PlayerActivity extends Activity {
     }
 
     private void saveProgress() {
-        if (!channel.vod || player == null) return;
+        if (!channel.vod || channel.id <= 0 || player == null) return;
         long pos = Math.max(0, player.getCurrentPosition());
         long dur = Math.max(0, player.getDuration());
         if (dur > 0 && pos > dur - 15000) pos = 0;

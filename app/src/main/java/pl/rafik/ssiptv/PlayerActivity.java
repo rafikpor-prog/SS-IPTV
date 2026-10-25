@@ -410,7 +410,7 @@ public final class PlayerActivity extends Activity {
         }
         settingsBody.addView(Ui.button(this, "Zamknij  ✕", false, v -> toggleSettings()),
                 Ui.margins(this, -1, -2, 0, 12, 0, 0));
-        settingsBody.getChildAt(settingsBody.getChildCount()-1).requestFocus();
+        settingsBody.getChildAt(3).requestFocus();
         showOsd();
     }
 
@@ -531,7 +531,6 @@ public final class PlayerActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                     if (settingsPanel == null && osd.getVisibility() != View.VISIBLE) {
                         toggleDescription();
-                        heart.requestFocus();
                         return true;
                     }
                     break;

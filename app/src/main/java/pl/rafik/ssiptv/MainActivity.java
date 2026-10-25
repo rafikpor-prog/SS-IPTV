@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -473,7 +474,7 @@ public final class MainActivity extends Activity {
         titles.addView(slogan);
         bar.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView source = Ui.text(this, "＋ Źródło", 12, Ui.BG, true);
+        TextView source = Ui.text(this, "Źródła", 12, Ui.BG, true);
         source.setGravity(Gravity.CENTER);
         source.setPadding(Ui.dp(this, 11), Ui.dp(this, 10), Ui.dp(this, 11), Ui.dp(this, 10));
         source.setBackground(Ui.rounded(this, Ui.ACCENT, 11));
@@ -482,8 +483,9 @@ public final class MainActivity extends Activity {
         Ui.tvFocus(source);
         bar.addView(source);
 
-        TextView settings = Ui.text(this, "⚙", 23, Ui.WHITE, false);
-        settings.setGravity(Gravity.CENTER);
+        ImageView settings = new ImageView(this);
+        settings.setImageResource(R.drawable.ic_nav_settings);
+        settings.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9));
         settings.setContentDescription("Ustawienia aplikacji");
         settings.setOnClickListener(v -> showTab("Ustawienia"));
         Ui.tvFocus(settings);
@@ -496,17 +498,20 @@ public final class MainActivity extends Activity {
         bottom.setPadding(Ui.dp(this, 9), Ui.dp(this, 4), Ui.dp(this, 9), Ui.dp(this, 5));
         bottom.setBackgroundColor(Ui.SURFACE);
         String[] names = {"Telewizja", "VOD", "Seriale", "Ulubione", "Ostatnie", "Źródła"};
-        String[] icons = {"▣", "▶", "▤", "♥", "◷", "＋"};
+        int[] icons = {R.drawable.ic_nav_tv, R.drawable.ic_nav_movies,
+                R.drawable.ic_nav_series, R.drawable.ic_nav_heart,
+                R.drawable.ic_nav_history, R.drawable.ic_nav_sources};
         for (int i = 0; i < names.length; i++) {
             final String itemName = names[i];
             boolean chosen = itemName.equals(tab);
             LinearLayout item = Ui.column(this);
             item.setGravity(Gravity.CENTER);
-            TextView icon = Ui.text(this, icons[i], 21, chosen ? Ui.ACCENT : Ui.MUTED, false);
-            icon.setGravity(Gravity.CENTER);
+            ImageView icon = new ImageView(this);
+            icon.setImageResource(icons[i]);
+            icon.setImageTintList(ColorStateList.valueOf(chosen ? Ui.ACCENT : Ui.MUTED));
             TextView label = Ui.text(this, itemName, 10, chosen ? Ui.ACCENT : Ui.SECONDARY, chosen);
             label.setGravity(Gravity.CENTER);
-            item.addView(icon);
+            item.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22)));
             item.addView(label);
             item.setOnClickListener(v -> showTab(itemName));
             Ui.tvFocus(item);
@@ -573,11 +578,11 @@ public final class MainActivity extends Activity {
         LinearLayout heading = Ui.row(this);
         sectionCaption = Ui.text(this, "0 kanałów", 12, Ui.ACCENT, true);
         heading.addView(sectionCaption, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView list = Ui.text(this, "☰ Lista", 12, tiled ? Ui.SECONDARY : Ui.ACCENT, !tiled);
+        TextView list = Ui.text(this, "Lista", 12, tiled ? Ui.SECONDARY : Ui.ACCENT, !tiled);
         list.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         list.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
         heading.addView(list, Ui.margins(this, -2, -2, 0, 0, 6, 0));
-        TextView tiles = Ui.text(this, "▦ Kafelki", 12, tiled ? Ui.ACCENT : Ui.SECONDARY, tiled);
+        TextView tiles = Ui.text(this, "Kafelki", 12, tiled ? Ui.ACCENT : Ui.SECONDARY, tiled);
         tiles.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         tiles.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
         heading.addView(tiles);
@@ -649,7 +654,7 @@ public final class MainActivity extends Activity {
                 allChannels.isEmpty() ? "Dodaj plik M3U albo zaloguj się do serwera IPTV." :
                         "Nie znaleziono pozycji w tym widoku.", 13, Ui.SECONDARY, false);
         empty.addView(guidance, Ui.margins(this, -1, -2, 0, 9, 0, 14));
-        empty.addView(Ui.button(this, "＋  Dodaj źródło M3U / IPTV", true,
+        empty.addView(Ui.button(this, "Dodaj źródło M3U / IPTV", true,
                 v -> showTab("Źródła")));
         resultsFrame.addView(empty, new FrameLayout.LayoutParams(-1, -1));
         collection.setEmptyView(empty);
@@ -755,7 +760,7 @@ public final class MainActivity extends Activity {
         m3u.addView(Ui.text(this, "◈  Playlista M3U", 19, Ui.WHITE, true));
         m3u.addView(Ui.text(this, "Import z pamięci telefonu lub z własnego linku. Kategorie są odczytywane automatycznie.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
-        TextView importButton = Ui.button(this, "Wybierz plik M3U  ＋", true,
+        TextView importButton = Ui.button(this, "Wybierz plik M3U", true,
                 v -> choosePlaylistFile(false));
         m3u.addView(importButton, Ui.margins(this, -1, -2, 0, 3, 0, 12));
         m3u.addView(Ui.button(this, "Android Box: alternatywny wybór pliku", false,
@@ -849,7 +854,7 @@ public final class MainActivity extends Activity {
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 6, 0, 20));
 
         LinearLayout summary = card();
-        summary.addView(Ui.text(this, "●  AUTOMATYCZNA AKTUALIZACJA", 11, Ui.ACCENT, true));
+        summary.addView(Ui.text(this, "AUTOMATYCZNA AKTUALIZACJA", 11, Ui.ACCENT, true));
         summary.addView(Ui.text(this, secure.epgStatus(), 17, Ui.WHITE, true),
                 Ui.margins(this, -1, -2, 0, 11, 0, 8));
         long last = secure.lastSync();
@@ -915,12 +920,12 @@ public final class MainActivity extends Activity {
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout screenCard = card();
-        screenCard.addView(Ui.text(this, "▣  Interfejs ekranu", 18, Ui.WHITE, true));
+        screenCard.addView(Ui.text(this, "Interfejs ekranu", 18, Ui.WHITE, true));
         screenCard.addView(Ui.text(this,
                 "Tryb TV: pełnoekranowa lista, boczne menu kategorii i nawigacja pilotem. " +
                 "Możesz włączyć go również na Android Box bez certyfikacji Android TV.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 12));
-        screenCard.addView(Ui.button(this, tvMode ? "✓  Tryb TV — wyłącz" :
+        screenCard.addView(Ui.button(this, tvMode ? "Tryb TV: wyłącz" :
                 "Włącz tryb TV dla pilota", true, v -> {
             boolean next = !tvMode;
             getPreferences(MODE_PRIVATE).edit().putInt("tv-ui-override", next ? 1 : 0).apply();
@@ -931,13 +936,13 @@ public final class MainActivity extends Activity {
         page.addView(screenCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout playlistsCard = card();
-        playlistsCard.addView(Ui.text(this, "◈  Aktywna lista kanałów", 19, Ui.WHITE, true));
+        playlistsCard.addView(Ui.text(this, "Aktywna lista kanałów", 19, Ui.WHITE, true));
         playlistsCard.addView(Ui.text(this, "Wybierz źródło do przeglądania i zmiany kanałów " +
                 "pilotem. Możesz też pokazywać wszystkie listy naraz.", 13, Ui.SECONDARY, false),
                 Ui.margins(this, -1, -2, 0, 7, 0, 12));
         String active = secure.activeSource();
         TextView everything = Ui.button(this,
-                (active.isEmpty() ? "✓  " : "◯  ") + "Wszystkie listy", active.isEmpty(), v -> {
+                (active.isEmpty() ? "Aktywne: " : "") + "Wszystkie listy", active.isEmpty(), v -> {
                     secure.setActiveSource("");
                     showTab("Ustawienia");
                     reloadData();
@@ -946,7 +951,7 @@ public final class MainActivity extends Activity {
         List<ChannelDatabase.Playlist> sources = database.playlists();
         for (ChannelDatabase.Playlist source : sources) {
             boolean chosen = source.source.equals(active);
-            playlistsCard.addView(Ui.button(this, (chosen ? "✓  " : "◯  ") +
+            playlistsCard.addView(Ui.button(this, (chosen ? "Aktywna: " : "") +
                     source.title + "  (" + source.count + ")", chosen, v -> {
                         secure.setActiveSource(source.source);
                         showTab("Ustawienia");
@@ -967,11 +972,11 @@ public final class MainActivity extends Activity {
         page.addView(playlistsCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout remoteCard = card();
-        remoteCard.addView(Ui.text(this, "⌁  Pilot Android TV", 18, Ui.WHITE, true));
+        remoteCard.addView(Ui.text(this, "Pilot Android TV", 18, Ui.WHITE, true));
         remoteCard.addView(Ui.text(this, "W katalogu: ← menu kategorii, ↑↓ wybór, OK odtwórz, " +
                 "czerwony: ulubione. Podczas odtwarzania: " +
                 "CH+/CH− lub ↑/↓: kanał. Cyfry 1–3: numer " +
-                "kanału (zatwierdź OK albo poczekaj). Czerwony: ♥. Zielony: OSD. " +
+                "kanału (zatwierdź OK albo poczekaj). Czerwony: ulubione. Zielony: OSD. " +
                 "Żółty: opis. Niebieski: ustawienia. Strzałki + OK obsługują " +
                 "przyciski ekranowe także bez kolorowych klawiszy.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 0));
@@ -995,7 +1000,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout actions = card();
         actions.addView(Ui.text(this, "ZARZĄDZAJ DANYMI", 11, Ui.MUTED, true));
-        actions.addView(Ui.button(this, "＋  Dodaj plik M3U lub konto IPTV", true,
+        actions.addView(Ui.button(this, "Dodaj plik M3U lub konto IPTV", true,
                 v -> showTab("Źródła")), Ui.margins(this, -1, -2, 0, 12, 0, 12));
         actions.addView(Ui.text(this, "Każdą listę możesz usunąć osobno w sekcji «Aktywna lista kanałów».",
                 12, Ui.SECONDARY, false));
@@ -1318,12 +1323,12 @@ public final class MainActivity extends Activity {
                     " · odcinek " + channel.episode +
                     (channel.playbackMs > 0 ? " · kontynuuj" : "");
             if (channel.playbackMs > 0)
-                return "▶ Kontynuuj od " + (channel.playbackMs / 60000) + " min";
+                return "Kontynuuj od " + (channel.playbackMs / 60000) + " min";
             return "Film VOD • " + channel.group;
         }
         if (channel.isSeries()) return "Serial • zobacz sezony i odcinki";
         if (guide != null && guide.current != null && !guide.current.isEmpty())
-            return "● Teraz: " + guide.current;
+            return "Teraz: " + guide.current;
         return channel.group + "  •  EPG w przygotowaniu";
     }
 
@@ -1369,9 +1374,11 @@ public final class MainActivity extends Activity {
             labels.addView(now);
             row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
 
-            TextView favorite = Ui.text(MainActivity.this, channel.favorite ? "♥" : "♡",
-                    25, channel.favorite ? 0xFFFF728D : Ui.MUTED, false);
-            favorite.setGravity(Gravity.CENTER);
+            ImageView favorite = new ImageView(MainActivity.this);
+            favorite.setImageResource(R.drawable.ic_nav_heart);
+            favorite.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.MUTED));
+            favorite.setPadding(Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14),
+                    Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14));
             favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             if (!tvMode) {
                 favorite.setOnClickListener(v -> toggleFavorite(channel));
@@ -1396,9 +1403,11 @@ public final class MainActivity extends Activity {
                     Ui.dp(MainActivity.this, poster ? 126 : 94),
                     Ui.dp(MainActivity.this, poster ? 154 : 94), Gravity.CENTER);
             art.addView(symbol, center);
-            TextView heart = Ui.text(MainActivity.this, channel.favorite ? "♥" : "♡", 25,
-                    channel.favorite ? 0xFFFF728D : Ui.WHITE, false);
-            heart.setGravity(Gravity.CENTER);
+            ImageView heart = new ImageView(MainActivity.this);
+            heart.setImageResource(R.drawable.ic_nav_heart);
+            heart.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.WHITE));
+            heart.setPadding(Ui.dp(MainActivity.this, 7), Ui.dp(MainActivity.this, 7),
+                    Ui.dp(MainActivity.this, 7), Ui.dp(MainActivity.this, 7));
             heart.setBackground(Ui.rounded(MainActivity.this, 0xD4142C42, 50));
             heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             if (!tvMode) {

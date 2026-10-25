@@ -2,7 +2,19 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.4.0
+## Funkcje 1.5.0
+
+### Stabilność IPTV — aktualizacja 1.5.0
+
+- **VLC / libVLC 3.7.5** jest teraz podstawowym odtwarzaczem **Telewizji na żywo**. Obsługuje natywne kodeki, demultipleksery transport stream i ścieżki dźwiękowe, w tym takie, których sprzętowy dekoder danego Android Box nie potrafi odtworzyć. **Media3/ExoPlayer** działa jako silnik awaryjny i domyślny odtwarzacz VOD (z zachowaniem zapisanego momentu filmu/odcinka).
+- Przy błędzie VLC aplikacja próbuje jeszcze raz nawiązać połączenie, a następnie uruchamia strumień w Media3. Po niepowodzeniu Media3 podejmowane są ograniczone próby wznowienia i powrotu do VLC. W **OSD → Ustawienia odtwarzania** można także ręcznie wybrać drugi silnik.
+- **Nadzór co 30 sekund** monitoruje stan połączenia i upływ czasu od ostatniego postępu. Po **60 sekundach bez postępu** następuje automatyczne odzyskiwanie transmisji. Restart jest wyłączony w pauzie i przy braku sieci, żeby nie powodować zapętleń.
+- Pierwszy wybór jakości obrazu jest **automatyczny, bez sztucznego limitu**. W silniku Media3 dla wielowariantowych HLS/DASH można obniżać limit przepływności w trakcie odtwarzania bez przerywania sesji, jeśli powtarza się niedobór bufora. Gdy adaptacja nie pomaga i stream zamarznie, potrzebne jest ponowne połączenie. Zwykły TS z jednym wariantem nie pozwala aplikacji samodzielnie zmniejszyć jakości — konieczny jest inny URL od dostawcy.
+- Na OSD jest osobny **wektorowy wskaźnik stanu sieci**: Wi-Fi ze stopniem sygnału (jeśli system udostępnia RSSI), Ethernet, sieć mobilna, brak połączenia lub nieznany sygnał. To siła sygnału lokalnej sieci, nie test szybkości serwera IPTV. Ikony w interfejsie odtwarzania przygotowano jako Android VectorDrawable (ścieżki SVG), bez emoji.
+- Listy M3U są zapisane trwale w prywatnych plikach i bazie SQLite jak wcześniej. Dodatkowa migawka katalogu w pamięci jest używana przy powrotach do TV i między ekranami — wielotysięcznej listy nie trzeba pobierać ani parsować od nowa przy każdym otwarciu. Migawka jest odświeżana po dodaniu/usunięciu/zmianie listy.
+- Dwie platformy ARM: `arm64-v8a`, `armeabi-v7a`. Nie ma bibliotek VLC dla emulatorów x86 w wydaniu instalacyjnym, aby zmniejszyć rozmiar APK. Informacje o silniku i licencji: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Wcześniejsze funkcje
 
 ### Android TV i odtwarzacz — aktualizacja 1.4.0
 
@@ -55,7 +67,7 @@ Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. 
 
 ## Budowanie
 
-Wymagania: JDK 17, Android SDK Platform 36, Build Tools 36.0.0 i sieć do pierwszego pobrania zależności. Projekt używa Android Gradle Plugin 8.9.1, Gradle 8.11.1, Media3 1.8.1. Android od API 26.
+Wymagania: JDK 17, Android SDK Platform 36, Build Tools 36.0.0 i sieć do pierwszego pobrania zależności. Projekt używa Android Gradle Plugin 8.9.1, Gradle 8.11.1, Media3 1.8.1 i libVLC 3.7.5. Android od API 26.
 
     ./gradlew :app:testDebugUnitTest :app:assembleDebug
 
@@ -63,7 +75,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.4.0 ma versionCode 6 i jest podpisywana tym samym kluczem co 1.0.0–1.3.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.5.0 ma versionCode 7 i jest podpisywana tym samym kluczem co 1.0.0–1.4.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \

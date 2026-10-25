@@ -17,6 +17,14 @@ import java.util.Set;
 public final class ChannelDatabase extends SQLiteOpenHelper {
     public static final String M3U = "M3U";
     public static final String XTREAM = "XTREAM";
+    // Baza SQLite pozostaje trwałym źródłem danych; pamięciowa migawka przyspiesza
+    // powrót do TV i wejście w player bez ponownego odczytu tysięcy rekordów.
+    private static final Object CATALOG_LOCK = new Object();
+    private static List<Channel> catalogSnapshot;
+
+    private static void invalidateCatalog() {
+        synchronized (CATALOG_LOCK) { catalogSnapshot = null; }
+    }
 
     public static final class Playlist {
         public String source;
@@ -171,6 +179,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
+        invalidateCatalog();
         return channels.size();
     }
 
@@ -221,6 +230,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
+        invalidateCatalog();
     }
 
     public synchronized void updateMetadata(long id, String description, String poster) {
@@ -229,6 +239,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         if (poster != null && !poster.trim().isEmpty()) values.put("logo", poster);
         if (values.size() > 0) getWritableDatabase().update("channels", values,
                 "_id=?", new String[]{Long.toString(id)});
+        if (values.size() > 0) invalidateCatalog();
     }
 
     public synchronized void deleteSource(String source) {
@@ -243,9 +254,13 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
+        invalidateCatalog();
     }
 
     public synchronized List<Channel> allChannels() {
+        synchronized (CATALOG_LOCK) {
+            if (catalogSnapshot != null) return new ArrayList<>(catalogSnapshot);
+        }
         ArrayList<Channel> items = new ArrayList<>();
         try (Cursor c = getReadableDatabase().query("channels", null, null, null, null, null,
                 "source COLLATE NOCASE, position, name COLLATE NOCASE")) {
@@ -271,19 +286,28 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 items.add(item);
             }
         }
-        return items;
+        synchronized (CATALOG_LOCK) { catalogSnapshot = items; }
+        return new ArrayList<>(items);
     }
 
     public synchronized void setFavorite(long id, boolean favorite) {
         ContentValues values = new ContentValues();
         values.put("favorite", favorite ? 1 : 0);
         getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
+        synchronized (CATALOG_LOCK) {
+            if (catalogSnapshot != null) for (Channel item : catalogSnapshot)
+                if (item.id == id) { item.favorite = favorite; break; }
+        }
     }
 
     public synchronized void markWatched(long id) {
         ContentValues values = new ContentValues();
         values.put("last_watched", System.currentTimeMillis());
         getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
+        synchronized (CATALOG_LOCK) {
+            if (catalogSnapshot != null) for (Channel item : catalogSnapshot)
+                if (item.id == id) { item.lastWatched = values.getAsLong("last_watched"); break; }
+        }
     }
 
     public synchronized void savePlayback(long id, long position, long duration) {
@@ -291,6 +315,11 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         values.put("playback_ms", Math.max(0, position));
         values.put("duration_ms", Math.max(0, duration));
         getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
+        synchronized (CATALOG_LOCK) {
+            if (catalogSnapshot != null) for (Channel item : catalogSnapshot)
+                if (item.id == id) { item.playbackMs = Math.max(0, position);
+                    item.durationMs = Math.max(0, duration); break; }
+        }
     }
 
     public synchronized Map<Long, Guide> readGuides() {

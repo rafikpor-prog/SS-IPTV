@@ -95,7 +95,7 @@ public final class EpgSync {
             try {
                 int matched = readXmltv(SOURCES[i], keys, guides, now, i);
                 sourcesOk++;
-                settings.saveEpgSourceStatus(i, "✓ Odczytane · " + matched +
+                settings.saveEpgSourceStatus(i, "Odczytane · " + matched +
                         " dopasowań • " +
                         new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
                                 .format(new Date(System.currentTimeMillis())));
@@ -103,7 +103,7 @@ public final class EpgSync {
                 failures.add("Źródło " + (i + 1) + ": " + e.getClass().getSimpleName());
                 String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
                 if (reason.length() > 70) reason = reason.substring(0, 70);
-                settings.saveEpgSourceStatus(i, "✕ Błąd: " + reason);
+                settings.saveEpgSourceStatus(i, "Błąd: " + reason);
             }
         }
         if (sourcesOk > 0) {

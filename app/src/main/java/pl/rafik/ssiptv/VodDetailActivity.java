@@ -142,9 +142,9 @@ public final class VodDetailActivity extends Activity {
                 new int[]{0xFF174257, 0xFF122C43, 0xFF0C2235}));
         FrameLayout artwork = new FrameLayout(this);
         artwork.setBackground(Ui.rounded(this, 0xFF0A2438, 12));
-        TextView artFallback = Ui.text(this, selected.isSeries() ? "▤" : "▶", 54,
-                Ui.ACCENT, true);
-        artFallback.setGravity(Gravity.CENTER);
+        ImageView artFallback = new ImageView(this);
+        artFallback.setImageResource(selected.isSeries() ? R.drawable.ic_nav_series : R.drawable.ic_player_play);
+        artFallback.setPadding(Ui.dp(this, 40), Ui.dp(this, 54), Ui.dp(this, 40), Ui.dp(this, 54));
         artwork.addView(artFallback, new FrameLayout.LayoutParams(-1, -1));
         ImageView poster = new ImageView(this);
         poster.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -164,9 +164,9 @@ public final class VodDetailActivity extends Activity {
             Channel film = currentChannel(selected.id);
             long position = film == null ? selected.playbackMs : film.playbackMs;
             texts.addView(Ui.button(this, position > 0 ?
-                    "▶  Kontynuuj od " + formatTime(position) : "▶  Odtwórz film", true,
+                    "Kontynuuj od " + formatTime(position) : "Odtwórz film", true,
                     v -> play(selected.id)), Ui.margins(this, -1, -2, 0, 15, 0, 0));
-            if (position > 0) texts.addView(Ui.button(this, "↺  Od początku", false, v -> {
+            if (position > 0) texts.addView(Ui.button(this, "Od początku", false, v -> {
                 database.savePlayback(selected.id, 0, 0);
                 play(selected.id);
             }), Ui.margins(this, -1, -2, 0, 8, 0, 0));
@@ -218,12 +218,14 @@ public final class VodDetailActivity extends Activity {
                 title.setMaxLines(2);
                 details.addView(title);
                 if (episode.playbackMs > 0) details.addView(Ui.text(this,
-                        "▶ Kontynuuj od " + formatTime(episode.playbackMs),
+                        "Kontynuuj od " + formatTime(episode.playbackMs),
                         11, Ui.SECONDARY, false));
                 else if (episode.lastWatched > 0) details.addView(Ui.text(this,
-                        "✓ Obejrzany", 11, Ui.SECONDARY, false));
+                        "Obejrzany", 11, Ui.SECONDARY, false));
                 episodeRow.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
-                episodeRow.addView(Ui.text(this, "▶", 20, Ui.ACCENT, true));
+                ImageView playIcon = new ImageView(this);
+                playIcon.setImageResource(R.drawable.ic_player_play);
+                episodeRow.addView(playIcon, new LinearLayout.LayoutParams(Ui.dp(this, 20), Ui.dp(this, 20)));
                 episodeRow.setBackground(Ui.rounded(this, Ui.CARD, 9));
                 episodeRow.setOnClickListener(v -> play(episode.id));
                 Ui.tvFocus(episodeRow);

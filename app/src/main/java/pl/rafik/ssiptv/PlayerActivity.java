@@ -2,12 +2,16 @@ package pl.rafik.ssiptv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.res.ColorStateList;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.net.TrafficStats;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -41,6 +45,10 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 
+import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.Media;
+import org.videolan.libvlc.util.VLCVideoLayout;
+
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +75,20 @@ public final class PlayerActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService storage = Executors.newSingleThreadExecutor();
     private ExoPlayer player;
+    private LibVLC libVlc;
+    private org.videolan.libvlc.MediaPlayer vlcPlayer;
+    private VLCVideoLayout vlcView;
+    private boolean usingVlc;
+    private boolean leftScreen;
+    private boolean userPaused;
+    private int vlcRecoveryAttempts;
+    private int exoRecoveryAttempts;
+    private int qualityCap = Integer.MAX_VALUE;
+    private boolean adaptiveStream;
+    private int lowBufferSamples;
+    private long engineStartedAt;
+    private long lastVlcTrafficBytes = -1;
+    private final PlaybackWatchdog watchdog = new PlaybackWatchdog();
     private Channel channel;
     private ChannelDatabase database;
     private LinearLayout osd;
@@ -87,12 +109,14 @@ public final class PlayerActivity extends Activity {
     private TextView nowText;
     private TextView nextText;
     private TextView bufferingText;
+    private TextView networkText;
+    private ImageView networkIcon;
     private TextView audioWarning;
     private View firstOsdAction;
     private List<Channel> cachedLive = new ArrayList<>();
     private final StringBuilder numberInput = new StringBuilder();
     private final Runnable commitNumber = this::commitChannelNumber;
-    private TextView heart;
+    private ImageView heart;
     private TextView quality;
     private TextView progress;
     private final Runnable hideOsd = () -> {
@@ -109,6 +133,15 @@ public final class PlayerActivity extends Activity {
         @Override public void run() {
             saveProgress();
             handler.postDelayed(this, 5000);
+        }
+    };
+    private final Runnable watchTick = new Runnable() {
+        @Override public void run() {
+            if (!isFinishing() && !isDestroyed()) {
+                updateNetworkOsd();
+                inspectPlayback();
+                handler.postDelayed(this, PlaybackWatchdog.CHECK_INTERVAL_MS);
+            }
         }
     };
 
@@ -145,6 +178,8 @@ public final class PlayerActivity extends Activity {
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
+        root.setFocusable(true);
+        root.setFocusableInTouchMode(true);
         setContentView(root);
         playerView = new PlayerView(this);
         // W TV nie pokazujemy panelu Media3 nad OSD i nie pozwalamy mu przechwytywać ↑/↓.
@@ -157,10 +192,15 @@ public final class PlayerActivity extends Activity {
             return false;
         });
         root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
+        vlcView = new VLCVideoLayout(this);
+        vlcView.setVisibility(View.GONE);
+        vlcView.setFocusable(false);
+        root.addView(vlcView, new FrameLayout.LayoutParams(-1, -1));
 
         addOsd(root);
-        TextView info = Ui.text(this, "ⓘ", 23, Ui.WHITE, true);
-        info.setGravity(Gravity.CENTER);
+        ImageView info = new ImageView(this);
+        info.setImageResource(R.drawable.ic_player_info);
+        info.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
         info.setContentDescription("Pokaż informacje o kanale i sterowanie OSD");
         info.setBackground(Ui.rounded(this, 0xC0102D43, 50));
         info.setOnClickListener(v -> showOsd());
@@ -183,67 +223,184 @@ public final class PlayerActivity extends Activity {
         startPlayback();
         handler.postDelayed(saveTick, 5000);
         handler.postDelayed(updateEpg, 60000);
+        handler.postDelayed(watchTick, PlaybackWatchdog.CHECK_INTERVAL_MS);
+        updateNetworkOsd();
         showOsd();
     }
 
     /** Odtwarzacz jest odtwarzany wewnątrz tej samej aktywności przy zmianie kanału. */
     private void startPlayback() {
-        long generation = ++playGeneration;
-        recoveryAttempts = 0;
+        ++playGeneration;
+        vlcRecoveryAttempts = 0;
+        exoRecoveryAttempts = 0;
+        qualityCap = Integer.MAX_VALUE;
+        lowBufferSamples = 0;
+        userPaused = false;
+        watchdog.reset(SystemClock.elapsedRealtime());
+        StreamSpec stream;
+        try { stream = resolveStream(); }
+        catch (Exception error) {
+            Log.w("SS-IPTV-Player", "Invalid stream", error);
+            setPlaybackStatus("Nie można odczytać adresu strumienia");
+            return;
+        }
+        String path = stream.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
+        adaptiveStream = path.endsWith(".m3u8") || path.endsWith(".mpd");
+        if (!channel.vod) startVlc(stream);
+        else startExo(stream);
+    }
+
+    private static final class StreamSpec {
+        String url;
+        final Map<String, String> headers = new HashMap<>();
+    }
+
+    private StreamSpec resolveStream() throws Exception {
+        StreamSpec spec = new StreamSpec();
+        spec.url = channel.url;
+        if (spec.url.startsWith("xtream://")) {
+            XtreamClient.Credentials creds = new SecureSettings(this).credentials();
+            if (creds == null) throw new IllegalStateException("Brak danych serwera Xtream");
+            spec.url = XtreamClient.streamUrl(creds, spec.url);
+        }
+        if (spec.url.contains("|")) {
+            String[] segments = spec.url.split("\\|", 2);
+            spec.url = segments[0];
+            for (String pair : segments[1].split("&")) {
+                String[] kv = pair.split("=", 2);
+                if (kv.length == 2 && (kv[0].equalsIgnoreCase("User-Agent") ||
+                        kv[0].equalsIgnoreCase("Referer")))
+                    spec.headers.put(kv[0], kv[1]);
+            }
+        }
+        return spec;
+    }
+
+    /** Silnik natywny VideoLAN jest domyślny dla telewizji, również dla kodeków audio TS. */
+    private void startVlc(StreamSpec spec) {
+        final long generation = ++playGeneration;
+        releaseExo();
+        releaseVlc();
+        usingVlc = true;
+        engineStartedAt = SystemClock.elapsedRealtime();
+        watchdog.reset(engineStartedAt);
+        lastVlcTrafficBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid());
+        playerView.setVisibility(View.GONE);
+        vlcView.setVisibility(View.VISIBLE);
         try {
-            String stream = channel.url;
-            if (stream.startsWith("xtream://")) {
-                XtreamClient.Credentials creds = new SecureSettings(this).credentials();
-                if (creds == null) throw new IllegalStateException("Brak danych serwera Xtream");
-                stream = XtreamClient.streamUrl(creds, stream);
+            if (libVlc == null) {
+                ArrayList<String> options = new ArrayList<>();
+                options.add("--network-caching=5000");
+                options.add("--live-caching=5000");
+                options.add("--file-caching=5000");
+                libVlc = new LibVLC(getApplicationContext(), options);
+                libVlc.setUserAgent("SS-IPTV/1.5 (Android TV)", "SS-IPTV/1.5");
             }
-            Map<String, String> headers = new HashMap<>();
-            if (stream.contains("|")) {
-                String[] segments = stream.split("\\|", 2);
-                stream = segments[0];
-                for (String pair : segments[1].split("&")) {
-                    String[] kv = pair.split("=", 2);
-                    if (kv.length == 2 &&
-                            (kv[0].equalsIgnoreCase("User-Agent") || kv[0].equalsIgnoreCase("Referer")))
-                        headers.put(kv[0], kv[1]);
+            org.videolan.libvlc.MediaPlayer nativePlayer =
+                    new org.videolan.libvlc.MediaPlayer(libVlc);
+            vlcPlayer = nativePlayer;
+            nativePlayer.attachViews(vlcView, null, false, false);
+            Media media = new Media(libVlc, Uri.parse(spec.url));
+            // Czas bufora to cel, nie gwarancja 5 s dla krótkiego okna live.
+            media.addOption(":network-caching=5000");
+            media.addOption(":live-caching=5000");
+            media.addOption(":http-reconnect=true");
+            for (Map.Entry<String, String> entry : spec.headers.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase("User-Agent"))
+                    media.addOption(":http-user-agent=" + entry.getValue());
+                else if (entry.getKey().equalsIgnoreCase("Referer"))
+                    media.addOption(":http-referrer=" + entry.getValue());
+            }
+            nativePlayer.setMedia(media);
+            media.release();
+            nativePlayer.setEventListener(event -> handler.post(() -> {
+                if (generation != playGeneration || !usingVlc || leftScreen) return;
+                long now = SystemClock.elapsedRealtime();
+                switch (event.type) {
+                    case org.videolan.libvlc.MediaPlayer.Event.Playing:
+                        setPlaybackStatus("VLC · Odtwarzanie");
+                        watchdog.heartbeat(now);
+                        showVlcQuality(nativePlayer);
+                        break;
+                    case org.videolan.libvlc.MediaPlayer.Event.TimeChanged:
+                        watchdog.observe(now, event.getTimeChanged());
+                        break;
+                    case org.videolan.libvlc.MediaPlayer.Event.Vout:
+                        showVlcQuality(nativePlayer);
+                        break;
+                    case org.videolan.libvlc.MediaPlayer.Event.Opening:
+                    case org.videolan.libvlc.MediaPlayer.Event.Buffering:
+                        setPlaybackStatus("VLC · Buforowanie");
+                        break;
+                    case org.videolan.libvlc.MediaPlayer.Event.EncounteredError:
+                        recoverPlayback("VLC zgłosił błąd strumienia");
+                        break;
+                    case org.videolan.libvlc.MediaPlayer.Event.EndReached:
+                        recoverPlayback("Strumień TV został zakończony");
+                        break;
+                    default: break;
                 }
-            }
+            }));
+            setPlaybackStatus("VLC · Łączenie");
+            nativePlayer.play();
+            root.requestFocus();
+        } catch (Exception | LinkageError error) {
+            Log.w("SS-IPTV-Player", "VLC unavailable, switching engine", error);
+            startExo(spec);
+        }
+    }
+
+    private void showVlcQuality(org.videolan.libvlc.MediaPlayer nativePlayer) {
+        if (nativePlayer == null) return;
+        org.videolan.libvlc.interfaces.IMedia.VideoTrack video =
+                nativePlayer.getCurrentVideoTrack();
+        if (video != null) showQuality(Math.min(video.width, video.height));
+    }
+
+    /** Media3 zapewnia natywne ABR dla HLS/DASH oraz drugą drogę dekodowania. */
+    private void startExo(StreamSpec spec) {
+        final long generation = ++playGeneration;
+        releaseVlc();
+        releaseExo();
+        usingVlc = false;
+        engineStartedAt = SystemClock.elapsedRealtime();
+        watchdog.reset(engineStartedAt);
+        vlcView.setVisibility(View.GONE);
+        playerView.setVisibility(View.VISIBLE);
+        try {
             DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                    .setUserAgent("SS-IPTV/1.4 Android TV")
+                    .setUserAgent("SS-IPTV/1.5 Android TV")
                     .setConnectTimeoutMs(18000)
                     .setReadTimeoutMs(30000)
                     .setAllowCrossProtocolRedirects(true);
-            if (!headers.isEmpty()) http.setDefaultRequestProperties(headers);
-            // Bufor wyprzedzający odtwarzanie: 15–60 s, wznowienie po zacięciu od 5 s.
-            // Faktyczna ilość zależy od okna live HLS i pamięci urządzenia.
+            if (!spec.headers.isEmpty()) http.setDefaultRequestProperties(spec.headers);
             DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                     .setBufferDurationsMs(15000, 60000, 2000, 5000)
                     .build();
             DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
                     .setEnableDecoderFallback(true);
-            playerView.setPlayer(null);
-            if (player != null) player.release();
-            player = new ExoPlayer.Builder(this)
+            ExoPlayer exo = new ExoPlayer.Builder(this)
                     .setRenderersFactory(renderers)
                     .setLoadControl(loadControl)
                     .setMediaSourceFactory(new DefaultMediaSourceFactory(
                             new DefaultDataSource.Factory(this, http)))
                     .build();
-            player.setAudioAttributes(new AudioAttributes.Builder()
+            player = exo;
+            exo.setAudioAttributes(new AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                     .setUsage(C.USAGE_MEDIA).build(), true);
-            playerView.setPlayer(player);
+            playerView.setPlayer(exo);
             playerView.setUseController(channel.vod);
             playerView.requestFocus();
-            MediaItem.Builder media = new MediaItem.Builder().setUri(stream);
-            String path = stream.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
+            MediaItem.Builder media = new MediaItem.Builder().setUri(spec.url);
+            String path = spec.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
             if (path.endsWith(".m3u8")) media.setMimeType(MimeTypes.APPLICATION_M3U8);
+            else if (path.endsWith(".mpd")) media.setMimeType(MimeTypes.APPLICATION_MPD);
             else if (path.startsWith("rtsp://")) media.setMimeType(MimeTypes.APPLICATION_RTSP);
-            player.setMediaItem(media.build());
-            if (channel.vod && channel.playbackMs > 0) {
-                player.seekTo(channel.playbackMs);
-            }
-            player.addListener(new Player.Listener() {
+            exo.setMediaItem(media.build());
+            if (qualityCap < Integer.MAX_VALUE) applyQualityCap();
+            if (channel.vod && channel.playbackMs > 0) exo.seekTo(channel.playbackMs);
+            exo.addListener(new Player.Listener() {
                 @Override public void onVideoSizeChanged(VideoSize size) {
                     if (generation == playGeneration)
                         showQuality(Math.min(size.width, size.height));
@@ -259,51 +416,171 @@ public final class PlayerActivity extends Activity {
                     }
                     if (audioWarning != null) {
                         audioWarning.setText(audioFound && !audioSupported ?
-                                "Brak dekodera audio" : "");
+                                "Brak dekodera audio · spróbuj VLC" : "");
                         audioWarning.setVisibility(audioFound && !audioSupported ?
                                 View.VISIBLE : View.GONE);
                     }
                 }
                 @Override public void onPlaybackStateChanged(int state) {
                     if (generation != playGeneration) return;
-                    if (state == Player.STATE_READY) recoveryAttempts = 0;
-                    if (bufferingText != null) {
-                        bufferingText.setText(state == Player.STATE_BUFFERING ?
-                                "◌ Buforowanie strumienia…" :
-                                state == Player.STATE_READY ? "● Odtwarzanie" : "");
-                        bufferingText.setVisibility(state == Player.STATE_BUFFERING ||
-                                state == Player.STATE_READY ? View.VISIBLE : View.GONE);
+                    if (state == Player.STATE_READY) {
+                        watchdog.heartbeat(SystemClock.elapsedRealtime());
+                        setPlaybackStatus("Media3 · Odtwarzanie");
+                    } else if (state == Player.STATE_BUFFERING) {
+                        setPlaybackStatus("Media3 · Buforowanie");
                     }
-                    if (state == Player.STATE_ENDED && channel.vod && channel.id > 0) {
+                    if (state == Player.STATE_ENDED && channel.vod && channel.id > 0)
                         storage.execute(() -> database.savePlayback(channel.id, 0, 0));
-                    }
                 }
                 @Override public void onPlayerError(PlaybackException error) {
                     if (generation != playGeneration) return;
-                    Log.w("SS-IPTV-Player", "Playback " + error.getErrorCodeName());
-                    if (error.errorCode >= 2000 && error.errorCode < 3000 &&
-                            error.errorCode != PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
-                            recoveryAttempts < 2) {
-                        int attempt = ++recoveryAttempts;
-                        if (bufferingText != null) bufferingText.setText(
-                                "Ponowne łączenie " + attempt + "/2…");
-                        handler.postDelayed(() -> {
-                            if (generation == playGeneration && player != null) {
-                                player.prepare();
-                                player.play();
-                            }
-                        }, attempt * 1800L);
-                    } else Toast.makeText(PlayerActivity.this,
-                            "Nie można odtworzyć: " + error.getErrorCodeName(), Toast.LENGTH_LONG).show();
-                    showOsd();
+                    Log.w("SS-IPTV-Player", "Media3 " + error.getErrorCodeName());
+                    recoverPlayback("Media3: " + error.getErrorCodeName());
                 }
             });
-            player.prepare();
-            player.play();
-        } catch (Exception error) {
-            Toast.makeText(this, "Nie udało się uruchomić strumienia", Toast.LENGTH_LONG).show();
-            Log.w("SS-IPTV-Player", "Stream setup failed: " + error.getClass().getSimpleName());
+            setPlaybackStatus("Media3 · Łączenie");
+            exo.prepare();
+            exo.play();
+        } catch (Exception | LinkageError error) {
+            Log.w("SS-IPTV-Player", "Media3 unavailable", error);
+            setPlaybackStatus("Błąd uruchamiania odtwarzacza");
+            showOsd();
         }
+    }
+
+    private void releaseExo() {
+        if (playerView != null) playerView.setPlayer(null);
+        if (player != null) {
+            player.release();
+            player = null;
+        }
+    }
+
+    private void releaseVlc() {
+        if (vlcPlayer != null) {
+            vlcPlayer.setEventListener(null);
+            vlcPlayer.stop();
+            vlcPlayer.detachViews();
+            vlcPlayer.release();
+            vlcPlayer = null;
+        }
+    }
+
+    /** Co 30 s diagnozujemy postęp, a po 60 s bez postępu odtwarzamy ponownie. */
+    private void inspectPlayback() {
+        NetworkIndicator network = NetworkIndicator.read(this);
+        if (!network.connected) {
+            setPlaybackStatus("Brak sieci · oczekiwanie na połączenie");
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (usingVlc && vlcPlayer != null) {
+            long nativePosition = vlcPlayer.getTime();
+            watchdog.observe(now, nativePosition);
+            // Część dostawców MPEG-TS nie udostępnia zegara PTS (getTime()==0).
+            // Wówczas napływ danych + aktywny dekoder stanowi pomocniczy sygnał,
+            // inaczej sprawna stacja byłaby błędnie restartowana co minutę.
+            long traffic = TrafficStats.getUidRxBytes(android.os.Process.myUid());
+            if (nativePosition <= 0 && traffic >= 0 && lastVlcTrafficBytes >= 0 &&
+                    traffic > lastVlcTrafficBytes + 8192 && vlcPlayer.isPlaying())
+                watchdog.heartbeat(now);
+            lastVlcTrafficBytes = traffic;
+        }
+        if (!usingVlc && player != null) {
+            if (player.isPlaying()) watchdog.observe(now, player.getCurrentPosition());
+            // Przy wielu wariantach w master HLS/DASH zmiana limitu odbywa się
+            // w locie przez selektor ABR, bez przeładowania całej transmisji.
+            if (adaptiveStream && player.isPlaying() &&
+                    player.getTotalBufferedDuration() < 3500) lowBufferSamples++;
+            else lowBufferSamples = 0;
+            if (lowBufferSamples >= 2 && qualityCap > 1_000_000) {
+                qualityCap = qualityCap == Integer.MAX_VALUE ? 4_000_000 :
+                        Math.max(1_000_000, qualityCap / 2);
+                applyQualityCap();
+                setPlaybackStatus("Media3 · Adaptacja przepływności bez restartu");
+                lowBufferSamples = 0;
+            }
+            if (adaptiveStream && qualityCap != Integer.MAX_VALUE &&
+                    now - engineStartedAt >= 180_000 && player.isPlaying() &&
+                    player.getTotalBufferedDuration() > 12000 && lowBufferSamples == 0) {
+                qualityCap = Integer.MAX_VALUE;
+                applyQualityCap();
+                setPlaybackStatus("Media3 · Automatyczna najwyższa jakość");
+            }
+        }
+        boolean paused = userPaused || leftScreen || channel.vod && player != null &&
+                !player.getPlayWhenReady();
+        if (watchdog.isStalled(now, network.connected, paused))
+            recoverPlayback("Brak postępu odtwarzania przez 60 s");
+    }
+
+    private void recoverPlayback(String reason) {
+        if (leftScreen || isFinishing() || isDestroyed()) return;
+        if (!NetworkIndicator.read(this).connected) {
+            setPlaybackStatus("Brak sieci · czekam na połączenie");
+            return;
+        }
+        Log.w("SS-IPTV-Player", reason + " | engine=" + (usingVlc ? "VLC" : "Media3"));
+        StreamSpec spec;
+        try { spec = resolveStream(); }
+        catch (Exception error) {
+            setPlaybackStatus("Nieprawidłowy adres strumienia");
+            return;
+        }
+        showOsd();
+        if (usingVlc) {
+            if (vlcRecoveryAttempts++ == 0) {
+                setPlaybackStatus("VLC · Ponowne łączenie");
+                startVlc(spec);
+            } else {
+                // Inny demultiplekser/dekoder często pomaga przy problematycznych TS.
+                setPlaybackStatus("Zmiana odtwarzacza: Media3");
+                startExo(spec);
+            }
+        } else {
+            if (adaptiveStream && qualityCap > 1_000_000) {
+                qualityCap = qualityCap == Integer.MAX_VALUE ? 4_000_000 :
+                        Math.max(1_000_000, qualityCap / 2);
+                applyQualityCap();
+                setPlaybackStatus("Media3 · Niższy wariant HLS/DASH, jeśli dostępny");
+                watchdog.reset(SystemClock.elapsedRealtime());
+                if (player != null) { player.prepare(); player.play(); }
+            } else if (exoRecoveryAttempts++ < 2) {
+                setPlaybackStatus("Media3 · Ponowne łączenie");
+                startExo(spec);
+            } else {
+                // Ograniczony cykl z krótkim opóźnieniem; nie blokuje interfejsu.
+                setPlaybackStatus("Ponowna próba VLC za 5 s");
+                long generation = playGeneration;
+                handler.postDelayed(() -> {
+                    if (generation == playGeneration && !leftScreen) {
+                        vlcRecoveryAttempts = 0;
+                        startVlc(spec);
+                    }
+                }, 5000);
+            }
+        }
+    }
+
+    private void applyQualityCap() {
+        if (player == null || !adaptiveStream) return;
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                .setMaxVideoBitrate(qualityCap).build());
+    }
+
+    private void setPlaybackStatus(String status) {
+        if (bufferingText != null) {
+            bufferingText.setText(status);
+            bufferingText.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void updateNetworkOsd() {
+        if (networkText == null || networkIcon == null) return;
+        NetworkIndicator status = NetworkIndicator.read(this);
+        networkIcon.setImageResource(status.icon);
+        networkText.setText(status.label);
+        networkText.setTextColor(status.connected ? Ui.SECONDARY : 0xFFFF8297);
     }
 
     private void addOsd(FrameLayout root) {
@@ -321,12 +598,18 @@ public final class PlayerActivity extends Activity {
         back.setOnClickListener(v -> finish());
         Ui.tvFocus(back);
         top.addView(back);
-        TextView hint = Ui.text(this, channel.vod ? "  VIDEO ON DEMAND" : "  ●  NA ŻYWO",
+        TextView hint = Ui.text(this, channel.vod ? "  VIDEO ON DEMAND" : "  NA ŻYWO",
                 11, Ui.SECONDARY, true);
         top.addView(hint, new LinearLayout.LayoutParams(0, -2, 1));
-        bufferingText = Ui.text(this, "", 11, Ui.ACCENT, false);
+        bufferingText = Ui.text(this, "", 10, Ui.ACCENT, false);
         bufferingText.setPadding(0, 0, Ui.dp(this, 14), 0);
         top.addView(bufferingText);
+        networkIcon = new ImageView(this);
+        networkIcon.setContentDescription("Stan połączenia sieciowego");
+        top.addView(networkIcon, new LinearLayout.LayoutParams(Ui.dp(this, 20), Ui.dp(this, 20)));
+        networkText = Ui.text(this, "Sprawdzam sieć", 10, Ui.SECONDARY, false);
+        networkText.setPadding(Ui.dp(this, 5), 0, Ui.dp(this, 10), 0);
+        top.addView(networkText);
         audioWarning = Ui.text(this, "", 11, 0xFFFFC57A, true);
         audioWarning.setPadding(0, 0, Ui.dp(this, 12), 0);
         audioWarning.setVisibility(View.GONE);
@@ -363,7 +646,7 @@ public final class PlayerActivity extends Activity {
         channelNameText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         channelNameText.setContentDescription("Nazwa kanału: " + channel.name);
         labels.addView(channelNameText);
-        nowText = Ui.text(this, "", 17, Ui.ACCENT, true);
+        nowText = Ui.text(this, "", 19, Ui.ACCENT, true);
         nowText.setMaxLines(2);
         nowText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(nowText);
@@ -376,9 +659,10 @@ public final class PlayerActivity extends Activity {
         if (channel.vod) labels.addView(progress);
         details.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
 
-        heart = Ui.text(this, channel.favorite ? "♥" : "♡", 22,
-                channel.favorite ? 0xFFFF728D : Ui.WHITE, false);
-        heart.setGravity(Gravity.CENTER);
+        heart = new ImageView(this);
+        heart.setImageResource(R.drawable.ic_nav_heart);
+        heart.setPadding(Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12));
+        heart.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.WHITE));
         heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
         heart.setOnClickListener(v -> toggleFavorite());
         Ui.tvFocus(heart);
@@ -399,14 +683,14 @@ public final class PlayerActivity extends Activity {
         LinearLayout actionsLine = Ui.row(this);
         actionsLine.setPadding(0, Ui.dp(this, 7), 0, 0);
         TextView instruction = Ui.text(this,
-                channel.vod ? "←  OSD   •   ▶  Odtwarzanie" :
-                        "↑↓ kanały   •   ← / OK sterowanie OSD", 10, Ui.MUTED, false);
+                channel.vod ? "OK: sterowanie OSD   |   Pauza i przewijanie" :
+                        "Góra/dół: kanały   |   Lewo/OK: sterowanie OSD", 10, Ui.MUTED, false);
         actionsLine.addView(instruction, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout actions = Ui.row(this);
-        firstOsdAction = addColorAction(actions, "Ulubione", 0xFFDD5165, v -> toggleFavorite());
-        addColorAction(actions, "OSD", 0xFF35AD83, v -> toggleOsd());
-        addColorAction(actions, "Opis", 0xFFE2B456, v -> toggleDescription());
-        addColorAction(actions, "Ustawienia", 0xFF5792D4, v -> toggleSettings());
+        firstOsdAction = addColorAction(actions, "Ulubione", R.drawable.ic_nav_heart, 0xFFDD5165, v -> toggleFavorite());
+        addColorAction(actions, "OSD", R.drawable.ic_player_info, 0xFF35AD83, v -> toggleOsd());
+        addColorAction(actions, "Opis", R.drawable.ic_nav_epg, 0xFFE2B456, v -> toggleDescription());
+        addColorAction(actions, "Ustawienia", R.drawable.ic_nav_settings, 0xFF5792D4, v -> toggleSettings());
         actionsLine.addView(actions);
         osd.addView(actionsLine);
 
@@ -418,10 +702,10 @@ public final class PlayerActivity extends Activity {
         if (quality == null) return;
         String label;
         int color;
-        if (height >= 2160) { label = "◆ 4K"; color = 0xFF7A48BF; }
-        else if (height >= 1080) { label = "▣ FULL HD"; color = 0xFF166AB0; }
-        else if (height >= 720) { label = "▣ HD"; color = 0xFF087D84; }
-        else if (height > 0) { label = "▣ SD"; color = 0xFF526175; }
+        if (height >= 2160) { label = "4K"; color = 0xFF7A48BF; }
+        else if (height >= 1080) { label = "FULL HD"; color = 0xFF166AB0; }
+        else if (height >= 720) { label = "HD"; color = 0xFF087D84; }
+        else if (height > 0) { label = "SD"; color = 0xFF526175; }
         else { label = "AUTO"; color = 0xFF526175; }
         quality.setText(label);
         quality.setBackground(Ui.rounded(this, color, 8));
@@ -462,12 +746,11 @@ public final class PlayerActivity extends Activity {
         initialsText.setText(channel.name.substring(0,
                 Math.min(2, channel.name.length())).toUpperCase(Locale.ROOT));
         LogoLoader.load(osdLogo, channel.logo);
-        heart.setText(channel.favorite ? "♥" : "♡");
-        heart.setTextColor(channel.favorite ? 0xFFFF728D : Ui.WHITE);
+        heart.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.WHITE));
         showQuality(0);
         updateProgramLabels();
         osdNavigationMode = false;
-        if (playerView != null) playerView.requestFocus();
+        focusPlayback();
         showOsd();
     }
 
@@ -480,19 +763,25 @@ public final class PlayerActivity extends Activity {
 
     private void exitOsdNavigation() {
         osdNavigationMode = false;
-        if (playerView != null) playerView.requestFocus();
+        focusPlayback();
         showOsd();
     }
 
-    private View addColorAction(LinearLayout actions, String label, int accent,
+    private void focusPlayback() {
+        if (usingVlc && root != null) root.requestFocus();
+        else if (playerView != null) playerView.requestFocus();
+    }
+
+    private View addColorAction(LinearLayout actions, String label, int vectorIcon, int accent,
                                 View.OnClickListener listener) {
         LinearLayout cell = Ui.row(this);
         cell.setGravity(Gravity.CENTER);
         cell.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 8), 0);
         cell.setBackground(Ui.rounded(this, 0xB21C2A38, 8));
-        View dot = new View(this);
-        dot.setBackground(Ui.rounded(this, accent, 20));
-        cell.addView(dot, new LinearLayout.LayoutParams(Ui.dp(this, 7), Ui.dp(this, 7)));
+        ImageView symbol = new ImageView(this);
+        symbol.setImageResource(vectorIcon);
+        symbol.setImageTintList(ColorStateList.valueOf(accent));
+        cell.addView(symbol, new LinearLayout.LayoutParams(Ui.dp(this, 15), Ui.dp(this, 15)));
         TextView button = Ui.text(this, label, 10, Ui.WHITE, true);
         button.setGravity(Gravity.CENTER);
         button.setPadding(Ui.dp(this, 5), 0, 0, 0);
@@ -511,8 +800,7 @@ public final class PlayerActivity extends Activity {
         }
         channel.favorite = !channel.favorite;
         boolean value = channel.favorite;
-        heart.setText(value ? "♥" : "♡");
-        heart.setTextColor(value ? 0xFFFF728D : Ui.WHITE);
+        heart.setImageTintList(ColorStateList.valueOf(value ? 0xFFFF728D : Ui.WHITE));
         heart.setContentDescription(value ? "Usuń z ulubionych" : "Dodaj do ulubionych");
         storage.execute(() -> database.setFavorite(channel.id, value));
         showOsd();
@@ -524,7 +812,7 @@ public final class PlayerActivity extends Activity {
             osd.setVisibility(View.GONE);
             handler.removeCallbacks(hideOsd);
             osdNavigationMode = false;
-            if (playerView != null) playerView.requestFocus();
+            focusPlayback();
         } else showOsd();
     }
 
@@ -557,7 +845,7 @@ public final class PlayerActivity extends Activity {
             root.removeView(settingsPanel);
             settingsPanel = null;
             osdNavigationMode = false;
-            if (playerView != null) playerView.requestFocus();
+            focusPlayback();
             showOsd();
             return;
         }
@@ -577,16 +865,27 @@ public final class PlayerActivity extends Activity {
                 Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         params.setMargins(Ui.dp(this, 10), Ui.dp(this, 20), Ui.dp(this, 18), Ui.dp(this, 20));
         root.addView(settingsPanel, params);
-        settingsBody.addView(Ui.text(this, "⚙  Ustawienia odtwarzania", 19, Ui.WHITE, true));
-        settingsBody.addView(Ui.text(this, "Wybierz aktywną listę • EPG • sterowanie",
+        settingsBody.addView(Ui.text(this, "Ustawienia odtwarzania", 19, Ui.WHITE, true));
+        settingsBody.addView(Ui.text(this, "Wybierz listę | EPG | sterowanie",
                 12, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 12));
         SecureSettings settings = new SecureSettings(this);
         settingsBody.addView(Ui.text(this, settings.epgStatus(), 12, Ui.ACCENT, false));
-        settingsBody.addView(Ui.button(this, "♪  Wybierz ścieżkę dźwięku", false,
+        settingsBody.addView(Ui.text(this, "Odtwarzacz: " + (usingVlc ? "VLC / VideoLAN" : "Media3 / ExoPlayer"),
+                12, Ui.SECONDARY, true), Ui.margins(this, -1, -2, 0, 12, 0, 5));
+        settingsBody.addView(Ui.button(this, "Przełącz silnik odtwarzania", false,
+                v -> {
+                    StreamSpec spec;
+                    try { spec = resolveStream(); }
+                    catch (Exception error) { return; }
+                    if (usingVlc) startExo(spec);
+                    else startVlc(spec);
+                    toggleSettings();
+                }), Ui.margins(this, -1, -2, 0, 5, 0, 5));
+        settingsBody.addView(Ui.button(this, "Wybierz ścieżkę dźwięku", false,
                 v -> showAudioTracks()), Ui.margins(this, -1, -2, 0, 9, 0, 5));
         String active = settings.activeSource();
         settingsBody.addView(Ui.button(this, active.isEmpty() ?
-                "✓  Wszystkie listy" : "◯  Wszystkie listy", active.isEmpty(), v -> {
+                "Wszystkie listy (aktywne)" : "Wszystkie listy", active.isEmpty(), v -> {
             settings.setActiveSource("");
             cachedLive = liveChannels();
             toggleSettings();
@@ -594,7 +893,7 @@ public final class PlayerActivity extends Activity {
         }), Ui.margins(this, -1, -2, 0, 13, 0, 5));
         for (ChannelDatabase.Playlist source : database.playlists()) {
             boolean selected = source.source.equals(active);
-            settingsBody.addView(Ui.button(this, (selected ? "✓  " : "◯  ") +
+            settingsBody.addView(Ui.button(this, (selected ? "Aktywna: " : "") +
                     source.title, selected, v -> {
                 settings.setActiveSource(source.source);
                 cachedLive = liveChannels();
@@ -602,14 +901,33 @@ public final class PlayerActivity extends Activity {
                 toggleSettings();
             }), Ui.margins(this, -1, -2, 0, 0, 0, 5));
         }
-        settingsBody.addView(Ui.button(this, "Zamknij  ✕", false, v -> toggleSettings()),
+        settingsBody.addView(Ui.button(this, "Zamknij", false, v -> toggleSettings()),
                 Ui.margins(this, -1, -2, 0, 12, 0, 0));
-        settingsBody.getChildAt(3).requestFocus();
+        settingsBody.getChildAt(4).requestFocus();
         showOsd();
     }
 
     /** Wybór alternatywnej ścieżki dźwiękowej, gdy pierwsza w strumieniu milczy. */
     private void showAudioTracks() {
+        if (usingVlc && vlcPlayer != null) {
+            org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getAudioTracks();
+            if (tracks == null || tracks.length == 0) {
+                new AlertDialog.Builder(this).setTitle("Ścieżki audio VLC")
+                        .setMessage("Strumień nie zgłosił jeszcze ścieżek audio. Spróbuj ponownie po załadowaniu kanału.")
+                        .setPositiveButton("OK", null).show();
+                return;
+            }
+            String[] labels = new String[tracks.length];
+            int selected = vlcPlayer.getAudioTrack();
+            for (int i = 0; i < tracks.length; i++)
+                labels[i] = (tracks[i].id == selected ? "Wybrana: " : "") + tracks[i].name;
+            new AlertDialog.Builder(this).setTitle("Ścieżki audio VLC")
+                    .setItems(labels, (dialog, which) -> {
+                        if (vlcPlayer != null) vlcPlayer.setAudioTrack(tracks[which].id);
+                        showOsd();
+                    }).setNegativeButton("Anuluj", null).show();
+            return;
+        }
         if (player == null) return;
         ArrayList<String> labels = new ArrayList<>();
         ArrayList<TrackSelectionOverride> choices = new ArrayList<>();
@@ -624,7 +942,7 @@ public final class PlayerActivity extends Activity {
                 String language = f.language == null || f.language.isEmpty() ?
                         "bez języka" : f.language;
                 String codec = f.sampleMimeType == null ? "audio" : f.sampleMimeType;
-                labels.add((group.isTrackSelected(i) ? "✓  " : "♪  ") +
+                labels.add((group.isTrackSelected(i) ? "Wybrana: " : "") +
                         language + (f.label == null ? "" : " · " + f.label) + " · " + codec);
                 choices.add(new TrackSelectionOverride(group.getMediaTrackGroup(), i));
             }
@@ -805,21 +1123,28 @@ public final class PlayerActivity extends Activity {
 
     @Override protected void onStart() {
         super.onStart();
+        leftScreen = false;
+        watchdog.reset(SystemClock.elapsedRealtime());
         if (player != null) player.play();
+        if (vlcPlayer != null && !vlcPlayer.isPlaying()) vlcPlayer.play();
     }
 
     @Override protected void onStop() {
+        leftScreen = true;
         saveProgress();
         if (player != null) player.pause();
+        if (vlcPlayer != null && vlcPlayer.isPlaying()) vlcPlayer.pause();
         super.onStop();
     }
 
     @Override protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         saveProgress();
-        if (player != null) {
-            player.release();
-            player = null;
+        releaseExo();
+        releaseVlc();
+        if (libVlc != null) {
+            libVlc.release();
+            libVlc = null;
         }
         storage.shutdown();
         super.onDestroy();

@@ -1,5 +1,6 @@
 package pl.rafik.ssiptv.ui;
 
+import android.content.ComponentCallbacks2;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.widget.ImageView;
@@ -14,13 +15,22 @@ import java.util.concurrent.Executors;
 
 /** Mała pamięć podręczna logotypów/posterów. Brak dostępu sieciowego z wątku UI. */
 public final class LogoLoader {
-    private static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(8 * 1024) {
+    private static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(4 * 1024) {
         @Override protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getByteCount() / 1024);
         }
     };
     private static final ExecutorService POOL = Executors.newFixedThreadPool(4);
     private LogoLoader() {}
+
+    public static void reduceMemoryForPlayback() {
+        // Podczas wideo pamięć powinna trafić do sprzętowego dekodera, nie logo.
+        CACHE.trimToSize(1024);
+    }
+
+    public static void onTrimMemory(int level) {
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) CACHE.evictAll();
+    }
 
     public static void load(ImageView view, String address) {
         view.setTag(address);

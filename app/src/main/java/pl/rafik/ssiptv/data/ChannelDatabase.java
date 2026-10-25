@@ -21,15 +21,26 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     // powrót do TV i wejście w player bez ponownego odczytu tysięcy rekordów.
     private static final Object CATALOG_LOCK = new Object();
     private static List<Channel> catalogSnapshot;
+    private static long catalogVersion;
+
+    /** Zmienia się tylko po zmianie rzeczywistej zawartości źródeł/katalogu. */
+    public static long getCatalogVersion() {
+        synchronized (CATALOG_LOCK) { return catalogVersion; }
+    }
 
     private static void invalidateCatalog() {
-        synchronized (CATALOG_LOCK) { catalogSnapshot = null; }
+        synchronized (CATALOG_LOCK) {
+            catalogSnapshot = null;
+            catalogVersion++;
+        }
     }
 
     public static final class Playlist {
         public String source;
         public String title;
         public String file;
+        public String remoteUrl;
+        public long lastSync;
         public int count;
     }
 
@@ -43,7 +54,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     }
 
     public ChannelDatabase(Context context) {
-        super(context, "ss_iptv.db", null, 3);
+        super(context, "ss_iptv.db", null, 4);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -59,11 +70,14 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 "episode_no INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE INDEX channel_group_index ON channels(group_name)");
         db.execSQL("CREATE INDEX channel_source_index ON channels(source)");
+        db.execSQL("CREATE INDEX channel_catalog_order ON channels(" +
+                "source COLLATE NOCASE, position, name COLLATE NOCASE)");
         db.execSQL("CREATE TABLE epg (channel_id INTEGER PRIMARY KEY, " +
                 "title TEXT, next_title TEXT, description TEXT NOT NULL DEFAULT '', " +
                 "start_ms INTEGER, end_ms INTEGER, next_ms INTEGER)");
         db.execSQL("CREATE TABLE playlists (source TEXT PRIMARY KEY, title TEXT NOT NULL, " +
-                "file_path TEXT NOT NULL DEFAULT '')");
+                "file_path TEXT NOT NULL DEFAULT '', " +
+                "remote_url TEXT NOT NULL DEFAULT '', last_synced_ms INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE series_favorites (source TEXT NOT NULL, series_id TEXT NOT NULL, " +
                 "PRIMARY KEY(source,series_id))");
     }
@@ -96,20 +110,34 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                     "SELECT 'XTREAM','Konto IPTV','' WHERE EXISTS " +
                     "(SELECT 1 FROM channels WHERE source='XTREAM')");
         }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE playlists ADD COLUMN remote_url TEXT NOT NULL DEFAULT ''");
+            db.execSQL("ALTER TABLE playlists ADD COLUMN last_synced_ms INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("CREATE INDEX channel_catalog_order ON channels(" +
+                    "source COLLATE NOCASE, position, name COLLATE NOCASE)");
+        }
     }
 
     public synchronized void savePlaylist(String source, String title, String file) {
+        savePlaylist(source, title, file, "", 0);
+    }
+
+    public synchronized void savePlaylist(String source, String title, String file,
+                                          String remoteUrl, long syncTime) {
         ContentValues values = new ContentValues();
         values.put("source", source);
         values.put("title", title);
         values.put("file_path", file == null ? "" : file);
+        values.put("remote_url", remoteUrl == null ? "" : remoteUrl);
+        values.put("last_synced_ms", Math.max(0, syncTime));
         getWritableDatabase().insertWithOnConflict("playlists", null, values,
                 SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     public synchronized List<Playlist> playlists() {
         ArrayList<Playlist> result = new ArrayList<>();
-        String sql = "SELECT p.source,p.title,p.file_path,COUNT(c._id) FROM playlists p " +
+        String sql = "SELECT p.source,p.title,p.file_path,COUNT(c._id)," +
+                "p.remote_url,p.last_synced_ms FROM playlists p " +
                 "LEFT JOIN channels c ON c.source=p.source GROUP BY p.source " +
                 "HAVING COUNT(c._id)>0 ORDER BY p.title COLLATE NOCASE";
         try (Cursor cursor = getReadableDatabase().rawQuery(sql, null)) {
@@ -119,6 +147,8 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 item.title = cursor.getString(1);
                 item.file = cursor.getString(2);
                 item.count = cursor.getInt(3);
+                item.remoteUrl = cursor.getString(4);
+                item.lastSync = cursor.getLong(5);
                 result.add(item);
             }
         }
@@ -260,34 +290,34 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     public synchronized List<Channel> allChannels() {
         synchronized (CATALOG_LOCK) {
             if (catalogSnapshot != null) return new ArrayList<>(catalogSnapshot);
-        }
-        ArrayList<Channel> items = new ArrayList<>();
-        try (Cursor c = getReadableDatabase().query("channels", null, null, null, null, null,
-                "source COLLATE NOCASE, position, name COLLATE NOCASE")) {
-            while (c.moveToNext()) {
-                Channel item = new Channel(c.getString(c.getColumnIndexOrThrow("name")),
-                        c.getString(c.getColumnIndexOrThrow("group_name")),
-                        c.getString(c.getColumnIndexOrThrow("tvg_id")),
-                        c.getString(c.getColumnIndexOrThrow("logo")),
-                        c.getString(c.getColumnIndexOrThrow("stream_url")),
-                        c.getString(c.getColumnIndexOrThrow("source")));
-                item.id = c.getLong(c.getColumnIndexOrThrow("_id"));
-                item.favorite = c.getInt(c.getColumnIndexOrThrow("favorite")) == 1;
-                item.vod = c.getInt(c.getColumnIndexOrThrow("is_vod")) == 1;
-                item.lastWatched = c.getLong(c.getColumnIndexOrThrow("last_watched"));
-                item.playbackMs = c.getLong(c.getColumnIndexOrThrow("playback_ms"));
-                item.durationMs = c.getLong(c.getColumnIndexOrThrow("duration_ms"));
-                item.kind = c.getString(c.getColumnIndexOrThrow("kind"));
-                item.description = c.getString(c.getColumnIndexOrThrow("description"));
-                item.seriesId = c.getString(c.getColumnIndexOrThrow("series_id"));
-                item.season = c.getInt(c.getColumnIndexOrThrow("season_no"));
-                item.episode = c.getInt(c.getColumnIndexOrThrow("episode_no"));
-                item.ordinal = c.getInt(c.getColumnIndexOrThrow("position"));
-                items.add(item);
+            ArrayList<Channel> items = new ArrayList<>();
+            try (Cursor c = getReadableDatabase().query("channels", null, null, null, null, null,
+                    "source COLLATE NOCASE, position, name COLLATE NOCASE")) {
+                while (c.moveToNext()) {
+                    Channel item = new Channel(c.getString(c.getColumnIndexOrThrow("name")),
+                            c.getString(c.getColumnIndexOrThrow("group_name")),
+                            c.getString(c.getColumnIndexOrThrow("tvg_id")),
+                            c.getString(c.getColumnIndexOrThrow("logo")),
+                            c.getString(c.getColumnIndexOrThrow("stream_url")),
+                            c.getString(c.getColumnIndexOrThrow("source")));
+                    item.id = c.getLong(c.getColumnIndexOrThrow("_id"));
+                    item.favorite = c.getInt(c.getColumnIndexOrThrow("favorite")) == 1;
+                    item.vod = c.getInt(c.getColumnIndexOrThrow("is_vod")) == 1;
+                    item.lastWatched = c.getLong(c.getColumnIndexOrThrow("last_watched"));
+                    item.playbackMs = c.getLong(c.getColumnIndexOrThrow("playback_ms"));
+                    item.durationMs = c.getLong(c.getColumnIndexOrThrow("duration_ms"));
+                    item.kind = c.getString(c.getColumnIndexOrThrow("kind"));
+                    item.description = c.getString(c.getColumnIndexOrThrow("description"));
+                    item.seriesId = c.getString(c.getColumnIndexOrThrow("series_id"));
+                    item.season = c.getInt(c.getColumnIndexOrThrow("season_no"));
+                    item.episode = c.getInt(c.getColumnIndexOrThrow("episode_no"));
+                    item.ordinal = c.getInt(c.getColumnIndexOrThrow("position"));
+                    items.add(item);
+                }
             }
+            catalogSnapshot = items;
+            return new ArrayList<>(items);
         }
-        synchronized (CATALOG_LOCK) { catalogSnapshot = items; }
-        return new ArrayList<>(items);
     }
 
     public synchronized void setFavorite(long id, boolean favorite) {

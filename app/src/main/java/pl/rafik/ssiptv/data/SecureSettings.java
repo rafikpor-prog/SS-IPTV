@@ -94,6 +94,11 @@ public final class SecureSettings {
         return prefs.getLong("epg_last_sync", 0);
     }
 
+    /** Po zmianie numerów rekordów M3U następne wejście odświeża mapowanie XMLTV. */
+    public void invalidateEpgCache() {
+        prefs.edit().putLong("epg_last_sync", 0).apply();
+    }
+
     public String epgStatus() {
         return prefs.getString("epg_status", "EPG oczekuje na synchronizację");
     }

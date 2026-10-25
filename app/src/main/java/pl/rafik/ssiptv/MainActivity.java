@@ -11,6 +11,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
@@ -88,6 +90,12 @@ public final class MainActivity extends Activity {
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, Integer> liveOrdinals = new HashMap<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
+    private long loadedCatalogVersion = -1;
+    private String loadedSource = "";
+    private boolean catalogLoading;
+    private boolean catalogReloadPending;
+    private boolean initialResume = true;
+    private boolean weeklyEpgPending;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -112,6 +120,20 @@ public final class MainActivity extends Activity {
         tiled = getPreferences(MODE_PRIVATE).getBoolean(tvMode ? "tv-grid" : "grid", false);
         showTab("Telewizja");
         reloadData();
+        // Cotygodniowy transfer nie może rywalizować z buforem oglądanego TV.
+        // Uruchamiamy go dopiero po 30 s, jeśli użytkownik pozostał w katalogu.
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (isFinishing() || isDestroyed() || !hasWindowFocus()) return;
+            PlaylistLoader.refreshRemoteSourcesIfDue(this, () -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    weeklyEpgPending = true;
+                    if (hasWindowFocus()) {
+                        reloadData();
+                        startWeeklyEpgIfPending();
+                    }
+                }
+            });
+        }, 30000);
         EpgSync.schedule(this);
         EpgSync.refreshIfStale(this);
         if (state == null) handleExternalPlaylist(getIntent());
@@ -119,7 +141,29 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (database != null) reloadData();
+        if (database == null) return;
+        // Powrót z PlayerActivity nie może ponownie budować tysięcy kafelków.
+        // Reagujemy tylko na faktyczny import/usunięcie źródła lub zmianę listy.
+        if (initialResume) {
+            initialResume = false;
+            return;
+        }
+        startWeeklyEpgIfPending();
+        String source = secure.activeSource();
+        if (!catalogLoading && (loadedCatalogVersion != ChannelDatabase.getCatalogVersion() ||
+                !loadedSource.equals(source))) reloadData();
+        else if (!allChannels.isEmpty()) {
+            if (isCatalogTab() && ("Ulubione".equals(tab) || "Ostatnie".equals(tab)))
+                filterChannels();
+            else if (adapter != null) adapter.notifyDataSetChanged();
+            io.execute(() -> {
+                Map<Long, ChannelDatabase.Guide> current = database.readGuides();
+                runOnUiThread(() -> {
+                    guides = current;
+                    if (adapter != null) adapter.notifyDataSetChanged();
+                });
+            });
+        }
     }
 
     @Override protected void onDestroy() {
@@ -127,10 +171,28 @@ public final class MainActivity extends Activity {
         super.onDestroy();
     }
 
+    private void startWeeklyEpgIfPending() {
+        if (!weeklyEpgPending) return;
+        weeklyEpgPending = false;
+        new Thread(() -> EpgSync.refresh(getApplicationContext()),
+                "ss-weekly-epg").start();
+    }
+
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        LogoLoader.onTrimMemory(level);
+    }
+
     private void reloadData() {
+        if (catalogLoading) {
+            catalogReloadPending = true;
+            return;
+        }
+        catalogLoading = true;
         io.execute(() -> {
             List<Channel> entries = database.allChannels();
             String active = secure.activeSource();
+            long revision = ChannelDatabase.getCatalogVersion();
             if (!active.isEmpty()) entries.removeIf(item -> !active.equals(item.source));
             entries = withSeriesCards(entries, database.seriesFavorites());
             Map<Long, Integer> numbering = new HashMap<>();
@@ -142,6 +204,9 @@ public final class MainActivity extends Activity {
             Map<Long, ChannelDatabase.Guide> programs = database.readGuides();
             List<Channel> catalog = entries;
             runOnUiThread(() -> {
+                catalogLoading = false;
+                loadedCatalogVersion = revision;
+                loadedSource = active;
                 allChannels = catalog;
                 liveOrdinals = numbering;
                 guides = programs;
@@ -150,6 +215,11 @@ public final class MainActivity extends Activity {
                     filterChannels();
                 } else if ("EPG".equals(tab)) {
                     showTab("EPG");
+                }
+                if (catalogReloadPending || loadedCatalogVersion != ChannelDatabase.getCatalogVersion() ||
+                        !loadedSource.equals(secure.activeSource())) {
+                    catalogReloadPending = false;
+                    reloadData();
                 }
             });
         });

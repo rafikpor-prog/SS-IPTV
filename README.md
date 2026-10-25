@@ -2,7 +2,20 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.5.0
+## Funkcje 1.6.0
+
+### Stabilność i obsługa obrazu na Android Box — aktualizacja 1.6.0
+
+- Domyślny start kanału Live przełączono na **Media3 z obsługą sprzętowego MediaCodec**. **VLC** jest drugą, automatycznie wybieraną drogą, jeśli pierwszy silnik nie wyrenderuje obrazu do ok. **11 sekund** lub nie obsłuży strumienia. Oba silniki można przełączać ręcznie w ustawieniach OSD.
+- Odtwarzacz nie jest odtwarzany od zera przy każdym `CH+/CH-`: Media3 używa jednej instancji ExoPlayer i dekodera, a VLC wykorzystuje ten sam MediaPlayer przy kolejnych próbach w tym silniku. Wielokrotne szybkie naciśnięcia pilota są **łączone w jedno przełączenie ostatnio wskazanego kanału** (260 ms). Zmniejsza to alokacje pamięci i ryzyko blokowania Android Box.
+- Bufor TV Media3 skrócono do docelowych **2,5–12 sekund** z limitem **16 MiB** (8 MiB na urządzeniu z małą klasą pamięci); VOD ma oddzielnie do 24/12 MiB. VLC korzysta z bufora około 1,8 s. Wielkości są parametrami żądanymi — nie każda transmisja i nie każdy kodek musi osiągnąć takie opóźnienie.
+- Pojawił się **centralny wskaźnik łączenia** z wektorową animacją, nazwą kanału, silnikiem i czasem oczekiwania. Jest widoczny również po automatycznym schowaniu OSD. Po błędzie widać komunikat o kolejnej próbie, zamiast czarnego ekranu.
+- OSD rozróżnia **odtwarzanie** i **rzeczywiste oczekiwanie na dane**. Powtarzalne zdarzenia `Buffering` z VLC nie zastępują komunikatu odtwarzania, jeżeli dekoder nadal pokazuje obraz.
+- Obraz zachowuje **oryginalne proporcje** (`FIT` / automatyczna skala libVLC): bez wymuszonego powiększenia i obcinania krawędzi.
+- Przewodnik EPG odczytywany jest do podręcznej mapy w tle, aktualizowanej co minutę; pokazuje program i następną audycję, jeśli źródło XMLTV zostało dopasowane. Gdy danych nie ma, komunikat wskazuje **brak dopasowania EPG**, nie pozorne buforowanie.
+- Po powrocie z odtwarzacza nie przebudowujemy całego katalogu. Kanały są w SQLite, a lista pozostaje również w pamięci procesu. Internetowe M3U wprowadzane od tej wersji zapamiętują źródłowy URL i mogą być automatycznie aktualizowane **co 7 dni**; listy importowane z pliku pozostają w pamięci lokalnej bez samoczynnego pobierania. Starsze importy URL bez zapamiętanego adresu należy zaimportować ponownie jeden raz, aby włączyć tygodniowe odświeżanie.
+
+### Poprzednie funkcje
 
 ### Stabilność IPTV — aktualizacja 1.5.0
 
@@ -75,7 +88,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.5.0 ma versionCode 7 i jest podpisywana tym samym kluczem co 1.0.0–1.4.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.6.0 ma versionCode 8 i jest podpisywana tym samym kluczem co 1.0.0–1.5.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \

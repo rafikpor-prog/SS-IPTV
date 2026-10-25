@@ -65,6 +65,20 @@ public final class MainActivity extends Activity {
     private static final String ALL = "Wszystkie";
     private static final String FAVORITES = "Ulubione";
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable guideDisplayTick = new Runnable() {
+        @Override public void run() {
+            if (isFinishing() || isDestroyed()) return;
+            io.execute(() -> {
+                Map<Long, ChannelDatabase.Guide> current = database.readGuides();
+                runOnUiThread(() -> {
+                    guides = current;
+                    if (adapter != null) adapter.notifyDataSetChanged();
+                });
+            });
+            uiHandler.postDelayed(this, 60000);
+        }
+    };
     private ChannelDatabase database;
     private SecureSettings secure;
     private LinearLayout main;
@@ -79,6 +93,7 @@ public final class MainActivity extends Activity {
     private String query = "";
     private String previousTab = "Telewizja";
     private boolean tiled;
+    private boolean mediaGrid = true;
     private boolean tvMode;
     private int tvGridColumns = 4;
     private FrameLayout tvRoot;
@@ -118,6 +133,7 @@ public final class MainActivity extends Activity {
         tvMode = tvOverride == 1 || (tvOverride == -1 && detectedTv);
         tvGridColumns = TvNavigation.gridColumns(device.screenWidthDp);
         tiled = getPreferences(MODE_PRIVATE).getBoolean(tvMode ? "tv-grid" : "grid", false);
+        mediaGrid = getPreferences(MODE_PRIVATE).getBoolean("poster-grid", true);
         showTab("Telewizja");
         reloadData();
         // Cotygodniowy transfer nie może rywalizować z buforem oglądanego TV.
@@ -141,6 +157,8 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        uiHandler.removeCallbacks(guideDisplayTick);
+        uiHandler.postDelayed(guideDisplayTick, 60000);
         if (database == null) return;
         // Powrót z PlayerActivity nie może ponownie budować tysięcy kafelków.
         // Reagujemy tylko na faktyczny import/usunięcie źródła lub zmianę listy.
@@ -167,8 +185,14 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        uiHandler.removeCallbacks(guideDisplayTick);
         io.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override protected void onPause() {
+        uiHandler.removeCallbacks(guideDisplayTick);
+        super.onPause();
     }
 
     private void startWeeklyEpgIfPending() {
@@ -365,20 +389,53 @@ public final class MainActivity extends Activity {
     }
 
     private void showTvChannels() {
+        boolean compactTv = tvMode &&
+                getResources().getConfiguration().screenHeightDp < 500;
+        if (isMediaTab()) {
+            LinearLayout showcase = Ui.column(this);
+            showcase.setPadding(Ui.dp(this, compactTv ? 12 : 20),
+                    Ui.dp(this, compactTv ? 7 : 15),
+                    Ui.dp(this, compactTv ? 12 : 20), Ui.dp(this, compactTv ? 7 : 14));
+            showcase.setBackground(Ui.outlined(this, 0xFF162838, 0xFF345366, 16));
+            if (!compactTv) {
+                TextView eyebrow = Ui.text(this, "SS  /  BIBLIOTEKA", 11, Ui.ACCENT, true);
+                eyebrow.setLetterSpacing(0.19f);
+                showcase.addView(eyebrow);
+            }
+            showcase.addView(Ui.text(this, "VOD".equals(tab) ?
+                    "Odkrywaj filmy" : "Odkrywaj seriale", compactTv ? 22 : 30, Ui.WHITE, true),
+                    Ui.margins(this, -1, -2, 0, compactTv ? 0 : 4, 0, 0));
+            if (!compactTv) showcase.addView(Ui.text(this,
+                    "Wybierz gatunek, odkryj okładkę, wróć do oglądania.",
+                    13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 4, 0, 0));
+            content.addView(showcase, Ui.margins(this, -1, -2, 0, 0, 0, compactTv ? 4 : 10));
+            content.addView(Ui.text(this, "GATUNKI I KOLEKCJE", 12, Ui.SECONDARY, true),
+                    Ui.margins(this, -1, compactTv ? 18 : 24, 4, 0, 0, compactTv ? 2 : 6));
+            HorizontalScrollView categories = new HorizontalScrollView(this);
+            categories.setHorizontalScrollBarEnabled(false);
+            categories.setFillViewport(false);
+            chips = Ui.row(this);
+            categories.addView(chips);
+            content.addView(categories, Ui.margins(this, -1, compactTv ? 40 : 52,
+                    0, 0, 0, compactTv ? 4 : 12));
+            updateChips();
+        }
         LinearLayout titleRow = Ui.row(this);
         String heading = "Telewizja".equals(tab) ? "TELEWIZJA" :
                 "VOD".equals(tab) ? "FILMY VOD" :
                 "Seriale".equals(tab) ? "SERIALE" :
                 "Ulubione".equals(tab) ? "ULUBIONE" : "OSTATNIO OGLĄDANE";
-        TextView title = Ui.text(this, heading, 25, Ui.WHITE, true);
+        TextView title = Ui.text(this, heading, compactTv ? 19 : 25, Ui.WHITE, true);
         titleRow.addView(title);
         tvCount = Ui.text(this, "", 14, Ui.ACCENT, true);
         tvCount.setPadding(Ui.dp(this, 20), 0, 0, 0);
         titleRow.addView(tvCount, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView hint = Ui.text(this, "←  Menu i kategorie     •     OK  Odtwórz", 12,
+        TextView hint = Ui.text(this, isMediaTab() ?
+                "OK  Szczegóły     •     ←  Menu" :
+                "←  Menu i kategorie     •     OK  Odtwórz", 12,
                 Ui.SECONDARY, false);
         titleRow.addView(hint);
-        content.addView(titleRow, Ui.margins(this, -1, 64, 0, 0, 0, 4));
+        content.addView(titleRow, Ui.margins(this, -1, compactTv ? 44 : 62, 0, 0, 0, 5));
         resultsFrame = new FrameLayout(this);
         content.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();
@@ -463,10 +520,10 @@ public final class MainActivity extends Activity {
                 items.addView(Ui.text(this, "SPOSÓB WYŚWIETLANIA", 11, Ui.SECONDARY, true),
                         Ui.margins(this, -1, 35, 0, 13, 0, 4));
                 items.addView(tvDrawerItem("Lista kanałów", R.drawable.ic_nav_list,
-                        !tiled, () -> setTiled(false)),
+                        !isTiled(), () -> setTiled(false)),
                         Ui.margins(this, -1, 46, 0, 1, 0, 1));
                 items.addView(tvDrawerItem("Kafelki", R.drawable.ic_nav_categories,
-                        tiled, () -> setTiled(true)),
+                        isTiled(), () -> setTiled(true)),
                         Ui.margins(this, -1, 46, 0, 1, 0, 1));
             }
         }
@@ -599,6 +656,12 @@ public final class MainActivity extends Activity {
                 "Ulubione".equals(name) || "Ostatnie".equals(name);
     }
 
+    private boolean isMediaTab() {
+        return "VOD".equals(tab) || "Seriale".equals(tab);
+    }
+
+    private boolean isTiled() { return isMediaTab() ? mediaGrid : tiled; }
+
     private void showChannels() {
         LinearLayout home = Ui.column(this);
         home.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), 0);
@@ -648,11 +711,11 @@ public final class MainActivity extends Activity {
         LinearLayout heading = Ui.row(this);
         sectionCaption = Ui.text(this, "0 kanałów", 12, Ui.ACCENT, true);
         heading.addView(sectionCaption, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView list = Ui.text(this, "Lista", 12, tiled ? Ui.SECONDARY : Ui.ACCENT, !tiled);
+        TextView list = Ui.text(this, "Lista", 12, isTiled() ? Ui.SECONDARY : Ui.ACCENT, !isTiled());
         list.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         list.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
         heading.addView(list, Ui.margins(this, -2, -2, 0, 0, 6, 0));
-        TextView tiles = Ui.text(this, "Kafelki", 12, tiled ? Ui.ACCENT : Ui.SECONDARY, tiled);
+        TextView tiles = Ui.text(this, "Kafelki", 12, isTiled() ? Ui.ACCENT : Ui.SECONDARY, isTiled());
         tiles.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         tiles.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
         heading.addView(tiles);
@@ -666,13 +729,14 @@ public final class MainActivity extends Activity {
     }
 
     private void setTiled(boolean enabled) {
-        if (tiled == enabled) {
+        if (isTiled() == enabled) {
             if (tvMode) showTab(tab);
             return;
         }
-        tiled = enabled;
+        if (isMediaTab()) mediaGrid = enabled;
+        else tiled = enabled;
         getPreferences(MODE_PRIVATE).edit()
-                .putBoolean(tvMode ? "tv-grid" : "grid", enabled).apply();
+                .putBoolean(isMediaTab() ? "poster-grid" : tvMode ? "tv-grid" : "grid", enabled).apply();
         showTab(tab);
     }
 
@@ -681,9 +745,9 @@ public final class MainActivity extends Activity {
         resultsFrame.removeAllViews();
         adapter = new ChannelAdapter();
         android.widget.AdapterView<?> collection;
-        if (tiled) {
+        if (isTiled()) {
             GridView grid = new GridView(this);
-            grid.setNumColumns(tvMode ? tvGridColumns :
+            grid.setNumColumns(tvMode ? (isMediaTab() ? Math.min(tvGridColumns, 5) : tvGridColumns) :
                     getResources().getConfiguration().smallestScreenWidthDp >= 600 ? 4 : 2);
             grid.setHorizontalSpacing(Ui.dp(this, tvMode ? 16 : 9));
             grid.setVerticalSpacing(Ui.dp(this, tvMode ? 16 : 9));
@@ -757,6 +821,14 @@ public final class MainActivity extends Activity {
                 selectedGroup = name;
                 updateChips();
                 filterChannels();
+                if (tvMode) for (int i = 0; i < chips.getChildCount(); i++) {
+                    View view = chips.getChildAt(i);
+                    if (view instanceof TextView &&
+                            name.contentEquals(((TextView) view).getText())) {
+                        view.requestFocus();
+                        break;
+                    }
+                }
             });
             Ui.tvFocus(chip);
             chips.addView(chip, Ui.margins(this, -2, 34, 0, 0, 8, 0));
@@ -929,9 +1001,9 @@ public final class MainActivity extends Activity {
                 Ui.margins(this, -1, -2, 0, 11, 0, 8));
         long last = secure.lastSync();
         String date = last > 0 ? DateFormat.getDateTimeInstance().format(last) : "Jeszcze nie pobrano";
-        summary.addView(Ui.text(this, "Ostatnio: " + date + " • co 12 godzin",
+        summary.addView(Ui.text(this, "Ostatnio: " + date + " • zapisane w urządzeniu • co 5 dni",
                 12, Ui.SECONDARY, false));
-        summary.addView(Ui.button(this, "↻  Synchronizuj EPG teraz", true, v ->
+        summary.addView(Ui.button(this, "Synchronizuj EPG teraz", true, v ->
                 performTask("Sprawdzanie czterech źródeł EPG…",
                         () -> EpgSync.refresh(getApplicationContext()), false)),
                 Ui.margins(this, -1, -2, 0, 16, 0, 0));
@@ -980,7 +1052,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.4.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.7.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1116,7 +1188,7 @@ public final class MainActivity extends Activity {
                 if (sourceStatus != null) sourceStatus.setText(message);
                 toast(message);
                 if (ok) {
-                    if (returnHome) showTab("Telewizja");
+                    if (returnHome) showTab(firstAvailableTab());
                     else if ("EPG".equals(tab) || "Ustawienia".equals(tab)) showTab(tab);
                     reloadData();
                     if (returnHome) {
@@ -1127,6 +1199,17 @@ public final class MainActivity extends Activity {
                 }
             });
         });
+    }
+
+    private String firstAvailableTab() {
+        boolean movies = false;
+        boolean series = false;
+        for (Channel item : database.allChannels()) {
+            if (!item.vod && !item.isSeries()) return "Telewizja";
+            if (item.isMovie()) movies = true;
+            if (item.isSeries() || item.isEpisode()) series = true;
+        }
+        return movies ? "VOD" : series ? "Seriale" : "Telewizja";
     }
 
     private void toast(String message) {
@@ -1249,10 +1332,10 @@ public final class MainActivity extends Activity {
             candidates.add(filePicker(Intent.ACTION_GET_CONTENT, true));
             candidates.add(filePicker(Intent.ACTION_GET_CONTENT, false));
         } else {
-            // ACTION_GET_CONTENT częściej obsługują menedżery plików z Android Boxów.
+            // Najpierw systemowy SAF: trwały grant odczytu bez STORAGE permission.
+            candidates.add(filePicker(Intent.ACTION_OPEN_DOCUMENT, true));
             candidates.add(filePicker(Intent.ACTION_GET_CONTENT, false));
             candidates.add(filePicker(Intent.ACTION_GET_CONTENT, true));
-            candidates.add(filePicker(Intent.ACTION_OPEN_DOCUMENT, true));
         }
         for (Intent candidate : candidates) {
             try {
@@ -1360,6 +1443,14 @@ public final class MainActivity extends Activity {
             toast("Menedżer plików nie zwrócił pliku. Wypróbuj alternatywny wybór.");
             return;
         }
+        if (data != null && (data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+                // Wciąż możemy czytać z jednorazowego grantu GET_CONTENT.
+            }
+        }
         importPlaylistUri(uri);
     }
 
@@ -1375,6 +1466,37 @@ public final class MainActivity extends Activity {
         image.setPadding(Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5));
         frame.addView(image, new FrameLayout.LayoutParams(-1, -1));
         LogoLoader.load(image, channel.logo);
+        return frame;
+    }
+
+    /** Pełnoekranowa miniatura filmu/serialu; nie mylimy jej z logo kanału. */
+    private FrameLayout poster(Channel item) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackground(Ui.rounded(this, 0xFF263A4A, 14));
+        frame.setClipToOutline(true);
+        TextView missing = Ui.text(this, item.name, 17, 0xFFB6D5E2, true);
+        missing.setGravity(Gravity.CENTER);
+        missing.setMaxLines(3);
+        missing.setPadding(Ui.dp(this, 18), 0, Ui.dp(this, 18), 0);
+        frame.addView(missing, new FrameLayout.LayoutParams(-1, -1));
+        ImageView artwork = new ImageView(this);
+        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        frame.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
+        LogoLoader.load(artwork, item.logo);
+        // Subtelny gradient zostawia czytelną etykietę bez zasłaniania okładki.
+        View shade = new View(this);
+        shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x00111B26, 0x22111B26, 0xB8000810}));
+        frame.addView(shade, new FrameLayout.LayoutParams(-1, -1));
+        TextView badge = Ui.text(this, item.isSeries() ? "SERIAL" : "FILM",
+                10, Ui.WHITE, true);
+        badge.setLetterSpacing(0.11f);
+        badge.setPadding(Ui.dp(this, 9), Ui.dp(this, 5), Ui.dp(this, 9), Ui.dp(this, 5));
+        badge.setBackground(Ui.rounded(this, 0xCB142C40, 6));
+        FrameLayout.LayoutParams placement = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.LEFT | Gravity.BOTTOM);
+        placement.setMargins(Ui.dp(this, 10), 0, 0, Ui.dp(this, 10));
+        frame.addView(badge, placement);
         return frame;
     }
 
@@ -1412,7 +1534,7 @@ public final class MainActivity extends Activity {
         @Override public View getView(int position, View recycled, ViewGroup parent) {
             Channel channel = visible.get(position);
             ChannelDatabase.Guide guide = guides.get(channel.id);
-            if (tiled) return makeTile(channel, guide);
+            if (isTiled()) return makeTile(channel, guide);
             return makeRow(channel, guide);
         }
 
@@ -1422,8 +1544,10 @@ public final class MainActivity extends Activity {
             row.setPadding(Ui.dp(MainActivity.this, 12), Ui.dp(MainActivity.this, 11),
                     Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 11));
             row.setBackground(Ui.rounded(MainActivity.this, Ui.SURFACE, 15));
-            row.addView(logo(channel, 56), new LinearLayout.LayoutParams(
-                    Ui.dp(MainActivity.this, 56), Ui.dp(MainActivity.this, 56)));
+            boolean media = channel.isMovie() || channel.isSeries();
+            row.addView(media ? poster(channel) : logo(channel, 56), new LinearLayout.LayoutParams(
+                    Ui.dp(MainActivity.this, media ? 78 : 56),
+                    Ui.dp(MainActivity.this, media ? 108 : 56)));
 
             LinearLayout labels = Ui.column(MainActivity.this);
             labels.setPadding(Ui.dp(MainActivity.this, 12), 0, Ui.dp(MainActivity.this, 5), 0);
@@ -1466,13 +1590,14 @@ public final class MainActivity extends Activity {
                     Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 13));
             tile.setBackground(Ui.rounded(MainActivity.this, Ui.SURFACE, 17));
 
-            FrameLayout art = new FrameLayout(MainActivity.this);
-            FrameLayout symbol = logo(channel, 100);
-            boolean poster = channel.vod || channel.isSeries();
-            FrameLayout.LayoutParams center = new FrameLayout.LayoutParams(
-                    Ui.dp(MainActivity.this, poster ? 126 : 94),
-                    Ui.dp(MainActivity.this, poster ? 154 : 94), Gravity.CENTER);
-            art.addView(symbol, center);
+            boolean isPoster = channel.vod || channel.isSeries();
+            FrameLayout art = isPoster ? poster(channel) : new FrameLayout(MainActivity.this);
+            if (!isPoster) {
+                FrameLayout symbol = logo(channel, 100);
+                FrameLayout.LayoutParams center = new FrameLayout.LayoutParams(
+                        Ui.dp(MainActivity.this, 94), Ui.dp(MainActivity.this, 94), Gravity.CENTER);
+                art.addView(symbol, center);
+            }
             ImageView heart = new ImageView(MainActivity.this);
             heart.setImageResource(R.drawable.ic_nav_heart);
             heart.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.WHITE));
@@ -1488,7 +1613,9 @@ public final class MainActivity extends Activity {
                     Ui.dp(MainActivity.this, 35), Ui.dp(MainActivity.this, 35), Gravity.RIGHT | Gravity.TOP);
             art.addView(heart, heartParams);
             tile.addView(art, new LinearLayout.LayoutParams(-1, Ui.dp(MainActivity.this,
-                    poster ? 160 : 102)));
+                    isPoster ? (tvMode ?
+                            (getResources().getConfiguration().screenHeightDp < 500 ? 124 : 225)
+                            : 205) : 102)));
 
             TextView name = Ui.text(MainActivity.this, channel.name, 15, Ui.WHITE, true);
             name.setMaxLines(3);
@@ -1504,7 +1631,7 @@ public final class MainActivity extends Activity {
             desc.setMaxLines(2);
             desc.setEllipsize(android.text.TextUtils.TruncateAt.END);
             tile.addView(desc);
-            if (!poster) tile.addView(Ui.text(MainActivity.this,
+            if (!isPoster) tile.addView(Ui.text(MainActivity.this,
                     "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
             return tile;
         }

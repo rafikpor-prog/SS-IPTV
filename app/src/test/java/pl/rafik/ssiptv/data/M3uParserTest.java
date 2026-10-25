@@ -74,4 +74,36 @@ public final class M3uParserTest {
         assertEquals("Opis pierwszego odcinka", items.get(0).description);
         assertEquals("https://example.org/cover.jpg", items.get(0).logo);
     }
+
+    @Test public void readsUtf16PlaylistsAndSingleQuotedGroups() throws Exception {
+        String fixture = "#EXTM3U\n" +
+                "#EXTINF:-1 group-title='Filmy, polskie' tvg-logo='https://example.org/poster.jpg',Film A\n" +
+                "https://example.org/movies/1.mp4\n";
+        byte[] raw = fixture.getBytes(StandardCharsets.UTF_16LE);
+        byte[] utf16 = new byte[raw.length + 2];
+        utf16[0] = (byte) 0xFF;
+        utf16[1] = (byte) 0xFE;
+        System.arraycopy(raw, 0, utf16, 2, raw.length);
+        List<Channel> parsed = M3uParser.parse(new ByteArrayInputStream(utf16));
+        assertEquals(1, parsed.size());
+        assertEquals("Filmy, polskie", parsed.get(0).group);
+        assertEquals("https://example.org/poster.jpg", parsed.get(0).logo);
+        assertTrue(parsed.get(0).isMovie());
+    }
+
+    @Test public void keepsSeriesGroupsAndOneByOneEpisodeNotation() throws Exception {
+        String fixture = "#EXTM3U\n" +
+                "#EXTINF:-1 group-title=Seriale,Miniserial 1x02\n" +
+                "https://example.org/a.m3u8\n" +
+                "#EXTINF:-1 group-title=Seriale,Inny serial\n" +
+                "https://example.org/b.m3u8\n";
+        List<Channel> parsed = M3uParser.parse(new ByteArrayInputStream(
+                fixture.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(2, parsed.size());
+        assertTrue(parsed.get(0).isEpisode());
+        assertEquals("Miniserial", parsed.get(0).seriesId);
+        assertEquals(2, parsed.get(0).episode);
+        assertTrue(parsed.get(1).isEpisode());
+        assertEquals("Seriale", parsed.get(1).group);
+    }
 }

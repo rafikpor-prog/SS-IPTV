@@ -96,7 +96,15 @@ public final class SecureSettings {
 
     /** Po zmianie numerów rekordów M3U następne wejście odświeża mapowanie XMLTV. */
     public void invalidateEpgCache() {
-        prefs.edit().putLong("epg_last_sync", 0).apply();
+        prefs.edit().putLong("epg_last_sync", 0).putLong("epg_last_attempt", 0).apply();
+    }
+
+    public long lastEpgAttempt() {
+        return prefs.getLong("epg_last_attempt", 0);
+    }
+
+    public void saveEpgAttempt(long timestamp) {
+        prefs.edit().putLong("epg_last_attempt", timestamp).apply();
     }
 
     public String epgStatus() {

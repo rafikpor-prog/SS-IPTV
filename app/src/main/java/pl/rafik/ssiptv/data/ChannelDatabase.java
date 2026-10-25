@@ -5,6 +5,7 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteStatement;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -54,7 +55,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     }
 
     public ChannelDatabase(Context context) {
-        super(context, "ss_iptv.db", null, 4);
+        super(context, "ss_iptv.db", null, 5);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -75,6 +76,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE epg (channel_id INTEGER PRIMARY KEY, " +
                 "title TEXT, next_title TEXT, description TEXT NOT NULL DEFAULT '', " +
                 "start_ms INTEGER, end_ms INTEGER, next_ms INTEGER)");
+        createProgrammeTables(db);
         db.execSQL("CREATE TABLE playlists (source TEXT PRIMARY KEY, title TEXT NOT NULL, " +
                 "file_path TEXT NOT NULL DEFAULT '', " +
                 "remote_url TEXT NOT NULL DEFAULT '', last_synced_ms INTEGER NOT NULL DEFAULT 0)");
@@ -116,6 +118,20 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
             db.execSQL("CREATE INDEX channel_catalog_order ON channels(" +
                     "source COLLATE NOCASE, position, name COLLATE NOCASE)");
         }
+        if (oldVersion < 5) createProgrammeTables(db);
+    }
+
+    private static void createProgrammeTables(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS epg_programmes (" +
+                "channel_id INTEGER NOT NULL, start_ms INTEGER NOT NULL, " +
+                "end_ms INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, " +
+                "PRIMARY KEY(channel_id,start_ms,end_ms))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS epg_programmes_window " +
+                "ON epg_programmes(start_ms,end_ms)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS epg_stage (" +
+                "channel_id INTEGER NOT NULL, start_ms INTEGER NOT NULL, " +
+                "end_ms INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, " +
+                "PRIMARY KEY(channel_id,start_ms,end_ms))");
     }
 
     public synchronized void savePlaylist(String source, String title, String file) {
@@ -191,6 +207,10 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         db.beginTransaction();
         try {
             db.delete("epg", "channel_id IN (SELECT _id FROM channels WHERE source=?)", new String[]{source});
+            db.delete("epg_programmes", "channel_id IN (SELECT _id FROM channels WHERE source=?)",
+                    new String[]{source});
+            db.delete("epg_stage", "channel_id IN (SELECT _id FROM channels WHERE source=?)",
+                    new String[]{source});
             if (XTREAM.equals(source)) db.delete("channels", "source=? AND kind!='EPISODE'",
                     new String[]{source});
             else db.delete("channels", "source=?", new String[]{source});
@@ -277,6 +297,10 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         db.beginTransaction();
         try {
             db.delete("epg", "channel_id IN (SELECT _id FROM channels WHERE source=?)", new String[]{source});
+            db.delete("epg_programmes", "channel_id IN (SELECT _id FROM channels WHERE source=?)",
+                    new String[]{source});
+            db.delete("epg_stage", "channel_id IN (SELECT _id FROM channels WHERE source=?)",
+                    new String[]{source});
             db.delete("channels", "source=?", new String[]{source});
             db.delete("playlists", "source=?", new String[]{source});
             db.delete("series_favorites", "source=?", new String[]{source});
@@ -354,6 +378,35 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
 
     public synchronized Map<Long, Guide> readGuides() {
         Map<Long, Guide> guides = new HashMap<>();
+        final long now = System.currentTimeMillis();
+        // Pobieramy wyłącznie program bieżący i najbliższy następny z lokalnego
+        // 5-dniowego harmonogramu. Nie otwieramy w tym celu sieci.
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT channel_id,start_ms,end_ms,title,description " +
+                        "FROM epg_programmes WHERE end_ms>? AND start_ms<? " +
+                        "ORDER BY channel_id,start_ms",
+                new String[]{Long.toString(now), Long.toString(now + 12L * 60 * 60 * 1000)})) {
+            while (c.moveToNext()) {
+                long id = c.getLong(0);
+                long start = c.getLong(1);
+                long end = c.getLong(2);
+                Guide guide = guides.get(id);
+                if (guide == null) { guide = new Guide(); guides.put(id, guide); }
+                if (start <= now && end > now) {
+                    if (guide.current.isEmpty() || start >= guide.start) {
+                        guide.current = c.getString(3);
+                        guide.description = c.getString(4);
+                        guide.start = start;
+                        guide.end = end;
+                    }
+                } else if (start > now && (guide.next.isEmpty() || start < guide.nextStart)) {
+                    guide.next = c.getString(3);
+                    guide.nextStart = start;
+                }
+            }
+        }
+        if (!guides.isEmpty()) return guides;
+        // Wsteczna kompatybilność z EPG wersji <= 1.6.0.
         try (Cursor c = getReadableDatabase().query("epg", null, null, null, null, null, null)) {
             while (c.moveToNext()) {
                 Guide g = new Guide();
@@ -363,10 +416,74 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 g.start = c.getLong(c.getColumnIndexOrThrow("start_ms"));
                 g.end = c.getLong(c.getColumnIndexOrThrow("end_ms"));
                 g.nextStart = c.getLong(c.getColumnIndexOrThrow("next_ms"));
-                guides.put(c.getLong(c.getColumnIndexOrThrow("channel_id")), g);
+                if (g.end > now || g.nextStart > now)
+                    guides.put(c.getLong(c.getColumnIndexOrThrow("channel_id")), g);
             }
         }
         return guides;
+    }
+
+    /** Strumieniowy import XMLTV: pamięć ograniczona, stara baza działa aż do zatwierdzenia. */
+    public synchronized EpgImport beginEpgImport() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("epg_stage", null, null);
+        return new EpgImport(db);
+    }
+
+    public static final class EpgImport implements AutoCloseable {
+        private final SQLiteDatabase database;
+        private final SQLiteStatement insert;
+        private int pending;
+        private int count;
+        private boolean committed;
+
+        private EpgImport(SQLiteDatabase database) {
+            this.database = database;
+            this.insert = database.compileStatement("INSERT OR IGNORE INTO epg_stage " +
+                    "(channel_id,start_ms,end_ms,title,description) VALUES (?,?,?,?,?)");
+        }
+
+        public void add(long id, long start, long end, String title, String description) {
+            if (pending == 0) database.beginTransaction();
+            insert.clearBindings();
+            insert.bindLong(1, id);
+            insert.bindLong(2, start);
+            insert.bindLong(3, end);
+            insert.bindString(4, title);
+            insert.bindString(5, description == null ? "" : description);
+            if (insert.executeInsert() != -1) count++;
+            if (++pending >= 100) flush();
+        }
+
+        private void flush() {
+            if (pending == 0) return;
+            database.setTransactionSuccessful();
+            database.endTransaction();
+            pending = 0;
+        }
+
+        public int count() { return count; }
+
+        public void commit() {
+            flush();
+            database.beginTransaction();
+            try {
+                database.delete("epg_programmes", null, null);
+                database.execSQL("INSERT OR IGNORE INTO epg_programmes " +
+                        "SELECT * FROM epg_stage");
+                database.delete("epg_stage", null, null);
+                database.setTransactionSuccessful();
+                committed = true;
+            } finally {
+                database.endTransaction();
+            }
+        }
+
+        @Override public void close() {
+            flush();
+            insert.close();
+            if (!committed) database.delete("epg_stage", null, null);
+        }
     }
 
     public synchronized void replaceGuides(Map<Long, Guide> guides) {

@@ -116,9 +116,12 @@ public final class XtreamClient {
                 String extension = movie.optString("container_extension", "mp4");
                 if (!extension.matches("[a-zA-Z0-9]{1,5}")) extension = "mp4";
                 String internal = "xtream://movie/" + id + "." + extension;
+                String artwork = movie.optString("stream_icon", "");
+                if (artwork.isEmpty()) artwork = movie.optString("cover_big", "");
+                if (artwork.isEmpty()) artwork = movie.optString("movie_image", "");
                 Channel film = new Channel(movie.optString("name", "Film " + id),
                         vodCategories.getOrDefault(movie.optString("category_id"), "Filmy"),
-                        "", movie.optString("stream_icon", ""), internal,
+                        "", artwork, internal,
                         ChannelDatabase.XTREAM).asVod();
                 film.description = movie.optString("plot", "");
                 result.add(film);
@@ -144,7 +147,8 @@ public final class XtreamClient {
                 if (id.isEmpty()) continue;
                 Channel parent = new Channel(entry.optString("name", "Serial " + id),
                         seriesCategories.getOrDefault(entry.optString("category_id"), "Seriale"),
-                        "", entry.optString("cover", ""), "xtream://catalog/" + id,
+                        "", entry.optString("cover", entry.optString("cover_big", "")),
+                        "xtream://catalog/" + id,
                         ChannelDatabase.XTREAM);
                 parent.kind = "SERIES";
                 parent.seriesId = "xtream:" + id;

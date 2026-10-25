@@ -2,7 +2,19 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.6.0
+## Funkcje 1.7.0
+
+### EPG, filmy i systemowy odtwarzacz — aktualizacja 1.7.0
+
+- EPG XMLTV pobiera preferencyjnie **oficjalne skompresowane pliki GZ** z epg.ovh, co znacznie ogranicza transfer. Niedostępne serwery i przekroczenie czasu nie usuwają uprzednio zapisanego przewodnika. Status źródła wskazuje problem z połączeniem, a nie błąd playlisty.
+- Przewodnik zapisuje w SQLite **pełny harmonogram audycji do pięciu dni naprzód**, zamiast wyłącznie audycji aktualnej i następnej. Wyświetlanie bieżącego programu korzysta z lokalnej bazy bez połączenia z siecią. Systemowy JobScheduler i kontrola daty pobierają ponownie EPG raz na pięć dni, a błędy sieci mają sześciogodzinne opóźnienie kolejnej próby. Użytkownik może wymusić odświeżenie ręcznie. Zakres jest zależny od zawartości źródła EPG.
+- Filmy VOD i Seriale dostały osobny ciemny katalog w stylu serwisów streamingowych: **duże okładki**, czytelny tytuł oraz **widoczne na górze, przewijane zakładki grup i gatunków** także w trybie Android TV. Pilot podświetla zakładki, pozwala wybrać grupę i wejść w szczegóły filmu/serialu. Domyślny widok VOD to siatka okładek.
+- Pobieranie okładek współdzieli równoległe prośby o ten sam URL i używa ograniczonej pamięci podręcznej bitmap; podczas odtwarzania pamięć jest oddawana dekoderowi.
+- Odtwarzanie automatycznie **sprawdza sprzętowe dekodery Android** i rozpoczyna od platformowego MediaPlayer/MediaCodec, jeżeli dostępny. W razie problemów używa Media3/ExoPlayer, a później VLC. Wszystkie trzy silniki pozostają wybieralne w ustawieniach OSD. Odtwarzanie na konkretnym TV Box wymaga testu na żywym strumieniu.
+- Import lokalnych M3U obsługuje wybór dokumentu przez SAF, deskryptor dostawcy plików, listy UTF-8 i UTF-16, a także atrybuty zapisane w apostrofach. Lista jest zachowywana lokalnie. Rozpoznawane są grupy seriali i zapis odcinków `S01E02` lub `1x02`.
+- **WAŻNE DOTYCZĄCE AKTUALIZACJI:** `applicationId` wydania produkcyjnego nadal wynosi `pl.rafik.ssiptv` (versionCode 9). Wersja debug ma odrębny identyfikator i podpis i **nie aktualizuje** aplikacji zainstalowanej. Do publikacji prawdziwego APK aktualizującego potrzebny jest oryginalny klucz `.jks` oraz jego hasło. Nie wolno zastępować certyfikatu bez wiedzy użytkownika.
+
+### Poprzednie funkcje — 1.6.0
 
 ### Stabilność i obsługa obrazu na Android Box — aktualizacja 1.6.0
 
@@ -60,7 +72,7 @@ Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. 
 - Logowanie do kompatybilnego serwera Xtream Codes przez adres URL, login i hasło, odczyt kategorii i kanałów Live z player_api.php.
 - Dane logowania szyfrowane AES-256-GCM kluczem z Android Keystore. Tokenów z Xtream nie trzymamy jako pełnych URL w bazie kanałów.
 - Odtwarzanie Media3/ExoPlayer: HLS, typowe MPEG-TS, RTSP oraz progresywne formaty wspierane przez ExoPlayer.
-- Automatyczne EPG XMLTV przy uruchomieniu i po imporcie kanałów; w tle cyklicznie co 12 godzin na sieci nielimitowanej/Wi-Fi (JobScheduler), ręczne odświeżanie i lokalny cache.
+- Automatyczne EPG XMLTV z pięciodniowym lokalnym cache; pobieranie w tle przez JobScheduler, ręczne odświeżanie i skompresowane źródła GZ.
 - Cztery źródła EPG: epg.ovh/pltv.xml, epg.polishteam.one/guide.xml, epg.ovh/pl.xml, epg.ovh/plar.xml.
 - Polski interfejs w ciemnym stylu, własna ikona, podgląd aktualnego programu na kanałach.
 - Widoczne u góry przyciski **+ Źródło** i **Ustawienia** oraz prawidłowy margines pod paskami systemowymi Androida.
@@ -88,7 +100,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.6.0 ma versionCode 8 i jest podpisywana tym samym kluczem co 1.0.0–1.5.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.7.0 ma versionCode 9. Aby zainstalować ją jako aktualizację pakietu `pl.rafik.ssiptv`, plik APK **musi** zostać podpisany tym samym kluczem co poprzednia instalacja. Samo zachowanie applicationId i zwiększenie versionCode nie zastępuje poprawnego podpisu.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \

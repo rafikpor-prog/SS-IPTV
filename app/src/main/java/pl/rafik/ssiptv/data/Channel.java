@@ -37,7 +37,8 @@ public final class Channel {
 
     public boolean isSeries() { return "SERIES".equals(kind); }
     public boolean isEpisode() { return "EPISODE".equals(kind); }
-    public boolean isMovie() { return "MOVIE".equals(kind) || (vod && !isEpisode()); }
+    public boolean isMovie() { return "MOVIE".equals(kind) ||
+            (vod && !isEpisode() && !isSeries()); }
 
     private static String clean(String text, String fallback) {
         return text == null || text.trim().isEmpty() ? fallback : text.trim();

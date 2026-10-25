@@ -9,7 +9,8 @@ public final class EpgJobService extends JobService {
 
     @Override public boolean onStartJob(JobParameters params) {
         worker = new Thread(() -> {
-            EpgSync.refresh(getApplicationContext());
+            if (EpgSync.isRefreshDue(getApplicationContext()))
+                EpgSync.refresh(getApplicationContext());
             jobFinished(params, false);
         }, "ss-epg-job");
         worker.start();

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.database.Cursor;
 import android.provider.OpenableColumns;
+import android.os.ParcelFileDescriptor;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -29,10 +30,34 @@ public final class PlaylistLoader {
                 new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) title = cursor.getString(0);
         } catch (Exception ignored) { }
-        try (InputStream in = ctx.getContentResolver().openInputStream(fileUri)) {
+        try (InputStream in = openDocumentStream(ctx, fileUri)) {
             if (in == null) throw new IOException("Nie można otworzyć wskazanego pliku");
             return install(ctx, in, title, "");
         }
+    }
+
+    private static InputStream openDocumentStream(Context context, Uri uri) throws IOException {
+        if (uri == null) throw new IOException("Nie wskazano pliku M3U");
+        if ("file".equalsIgnoreCase(uri.getScheme())) {
+            if (uri.getPath() == null) throw new IOException("Plik nie ma ścieżki");
+            return new FileInputStream(uri.getPath());
+        }
+        try {
+            InputStream direct = context.getContentResolver().openInputStream(uri);
+            if (direct != null) return direct;
+        } catch (SecurityException ex) {
+            throw new IOException("Brak dostępu do pliku. Wybierz go ponownie w menedżerze plików.", ex);
+        } catch (IOException first) {
+            // Niektórzy dostawcy plików dla Android TV udostępniają deskryptor,
+            // ale nie implementują ContentResolver.openInputStream().
+            try {
+                ParcelFileDescriptor pfd = context.getContentResolver()
+                        .openFileDescriptor(uri, "r");
+                if (pfd != null) return new ParcelFileDescriptor.AutoCloseInputStream(pfd);
+            } catch (Exception ignored) { }
+            throw first;
+        }
+        throw new IOException("Menedżer plików nie udostępnił zawartości M3U");
     }
 
     public static List<Channel> importWeb(Context ctx, String url) throws Exception {
@@ -83,6 +108,7 @@ public final class PlaylistLoader {
                 db.replaceSource(source, channels);
                 db.savePlaylist(source, title == null || title.isEmpty() ? "Lista M3U" : title,
                         filename, remoteUrl, System.currentTimeMillis());
+                new SecureSettings(ctx).invalidateEpgCache();
             } catch (Exception failure) {
                 target.delete();
                 throw failure;

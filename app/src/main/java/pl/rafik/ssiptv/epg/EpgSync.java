@@ -12,11 +12,13 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.net.URL;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -38,7 +40,9 @@ public final class EpgSync {
             "https://epg.ovh/pl.xml",
             "https://epg.ovh/plar.xml"
     };
-    public static final long REFRESH_INTERVAL_MS = 12L * 60 * 60 * 1000;
+    // Źródło epg.ovh publikuje pięciodniowe przewodniki. Harmonogram programów
+    // zapisujemy w SQLite i aktualizujemy tylko po pięciu dniach.
+    public static final long REFRESH_INTERVAL_MS = EpgRefreshPolicy.INTERVAL_MS;
     private static final long MAX_XML_BYTES = 140L * 1024 * 1024;
     private static final int JOB_ID = 271041;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
@@ -48,9 +52,9 @@ public final class EpgSync {
     public static void schedule(Context ctx) {
         JobScheduler scheduler = ctx.getSystemService(JobScheduler.class);
         if (scheduler == null) return;
+        if (scheduler.getPendingJob(JOB_ID) != null) return;
         JobInfo job = new JobInfo.Builder(JOB_ID, new ComponentName(ctx, EpgJobService.class))
-                // Zaplanowane duże transfery EPG tylko przy nielimitowanej sieci.
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED)
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setPeriodic(REFRESH_INTERVAL_MS)
                 .build();
         scheduler.schedule(job);
@@ -58,10 +62,16 @@ public final class EpgSync {
 
     public static void refreshIfStale(Context context) {
         Context app = context.getApplicationContext();
-        if (System.currentTimeMillis() - new SecureSettings(app).lastSync() > REFRESH_INTERVAL_MS) {
+        if (isRefreshDue(app)) {
             Thread worker = new Thread(() -> refresh(app), "ss-epg-initial");
             worker.start();
         }
+    }
+
+    static boolean isRefreshDue(Context context) {
+        SecureSettings settings = new SecureSettings(context);
+        return EpgRefreshPolicy.isDue(System.currentTimeMillis(),
+                settings.lastSync(), settings.lastEpgAttempt());
     }
 
     public static String refresh(Context context) {
@@ -76,6 +86,7 @@ public final class EpgSync {
     private static String performRefresh(Context context) {
         ChannelDatabase db = new ChannelDatabase(context);
         SecureSettings settings = new SecureSettings(context);
+        settings.saveEpgAttempt(System.currentTimeMillis());
         List<Channel> channels = db.allChannels();
         if (channels.isEmpty()) return "Dodaj kanały, aby dopasować program EPG";
         Map<String, List<Long>> keys = new HashMap<>();
@@ -84,61 +95,58 @@ public final class EpgSync {
             addKey(keys, c.tvgId, c.id);
             addKey(keys, c.name, c.id);
         }
+        if (keys.isEmpty()) return "Brak kanałów TV do dopasowania — EPG nie jest potrzebne dla VOD";
 
-        Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
-        int sourcesOk = 0;
-        List<String> failures = new ArrayList<>();
+        int sourceOk = -1;
+        int stored = 0;
         long now = System.currentTimeMillis();
         for (int i = 0; i < SOURCES.length; i++) {
             if (Thread.currentThread().isInterrupted()) break;
+            if (sourceOk >= 0) {
+                settings.saveEpgSourceStatus(i, "Pominięto — EPG zapisano ze źródła " + (sourceOk + 1));
+                continue;
+            }
             settings.saveEpgSourceStatus(i, "Trwa odczyt…");
-            try {
-                int matched = readXmltv(SOURCES[i], keys, guides, now, i);
-                sourcesOk++;
-                settings.saveEpgSourceStatus(i, "Odczytane · " + matched +
-                        " dopasowań • " +
+            try (ChannelDatabase.EpgImport writer = db.beginEpgImport()) {
+                // Oficjalne .gz są nawet 8-10 razy mniejsze niż surowy XMLTV.
+                String url = SOURCES[i].startsWith("https://epg.ovh/") ?
+                        SOURCES[i].replace(".xml", ".gz") : SOURCES[i];
+                int matched = readXmltv(url, keys, writer, now);
+                if (matched == 0) throw new IOException("Brak dopasowań do listy kanałów");
+                writer.commit();
+                stored = matched;
+                sourceOk = i;
+                settings.saveEpgSourceStatus(i, "Zapisano " + matched +
+                        " audycji • " +
                         new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
                                 .format(new Date(System.currentTimeMillis())));
             } catch (Exception e) {
-                failures.add("Źródło " + (i + 1) + ": " + e.getClass().getSimpleName());
-                String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                String reason = connectionError(e);
                 if (reason.length() > 70) reason = reason.substring(0, 70);
-                settings.saveEpgSourceStatus(i, "Błąd: " + reason);
+                settings.saveEpgSourceStatus(i, "Niedostępne: " + reason + " · dane lokalne zachowane");
             }
         }
-        if (sourcesOk > 0) {
-            // Nie czyścimy działającego przewodnika, jeśli inne XMLTV zawiodły albo
-            // nie zawierały określonego kanału. Zachowujemy tylko nadal aktualne dane.
-            for (Map.Entry<Long, ChannelDatabase.Guide> entry : db.readGuides().entrySet()) {
-                ChannelDatabase.Guide cached = entry.getValue();
-                ChannelDatabase.Guide fresh = guides.get(entry.getKey());
-                if (fresh == null) {
-                    if (cached.end > now || cached.nextStart > now)
-                        guides.put(entry.getKey(), cached);
-                    continue;
-                }
-                if (fresh.current.isEmpty() && cached.end > now &&
-                        cached.current != null && !cached.current.isEmpty()) {
-                    fresh.current = cached.current;
-                    fresh.description = cached.description;
-                    fresh.start = cached.start;
-                    fresh.end = cached.end;
-                }
-                if (fresh.next.isEmpty() && cached.nextStart > now &&
-                        cached.next != null && !cached.next.isEmpty()) {
-                    fresh.next = cached.next;
-                    fresh.nextStart = cached.nextStart;
-                }
-            }
-            if (!guides.isEmpty()) db.replaceGuides(guides);
-            String status = "EPG: " + guides.size() + " kanałów • " + sourcesOk +
-                    "/4 źródła" + (failures.isEmpty() ? "" : " • część źródeł niedostępna");
+        if (sourceOk >= 0) {
+            String status = "EPG offline: " + stored + " audycji • źródło " +
+                    (sourceOk + 1) + "/4 • ponowne pobranie za 5 dni";
             settings.saveEpgStatus(System.currentTimeMillis(), status);
             return status;
         }
-        String status = "EPG niedostępne — sprawdź internet i źródła";
+        String status = "Źródła EPG niedostępne — używam zapisanych danych. " +
+                "Kolejna próba za 6 godzin";
         settings.saveEpgStatus(0, status);
         return status;
+    }
+
+    private static String connectionError(Exception error) {
+        if (error instanceof SocketTimeoutException) return "Przekroczono czas połączenia";
+        if (error instanceof UnknownHostException) return "Nie można odnaleźć serwera";
+        if (error instanceof ConnectException) return "Serwer odrzucił połączenie";
+        String description = error.getMessage();
+        if (description == null || description.isEmpty()) return error.getClass().getSimpleName();
+        if (description.contains("failed to connect") || description.contains("timed out"))
+            return "Serwer nie odpowiada";
+        return description;
     }
 
     private static void addKey(Map<String, List<Long>> keys, String text, long id) {
@@ -157,11 +165,11 @@ public final class EpgSync {
     }
 
     private static int readXmltv(String address, Map<String, List<Long>> keys,
-                                  Map<Long, ChannelDatabase.Guide> guides,
-                                  long now, int priority) throws Exception {
+                                  ChannelDatabase.EpgImport writer,
+                                  long now) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(address).openConnection();
-        conn.setConnectTimeout(12000);
-        conn.setReadTimeout(60000);
+        conn.setConnectTimeout(6500);
+        conn.setReadTimeout(18000);
         conn.setRequestProperty("Accept-Encoding", "gzip");
         conn.setRequestProperty("User-Agent", "SS-IPTV/1.0 (XMLTV)");
         try {
@@ -184,7 +192,7 @@ public final class EpgSync {
                         return n;
                     }
                 };
-                return parse(bounded, keys, guides, now, priority);
+                return parse(bounded, keys, writer, now);
             }
         } finally {
             conn.disconnect();
@@ -192,8 +200,8 @@ public final class EpgSync {
     }
 
     private static int parse(InputStream xml, Map<String, List<Long>> keys,
-                              Map<Long, ChannelDatabase.Guide> guides,
-                              long now, int priority) throws Exception {
+                              ChannelDatabase.EpgImport writer,
+                              long now) throws Exception {
         XmlPullParser parser = XmlPullParserFactory.newInstance().newPullParser();
         parser.setInput(xml, null);
         Map<String, List<Long>> ids = new HashMap<>();
@@ -248,26 +256,15 @@ public final class EpgSync {
                 } else if ("programme".equals(tag) && programmeId != null) {
                     List<Long> matched = ids.get(programmeId);
                     if (matched == null) matched = matchingIds(keys, programmeId);
-                    if (matched != null && !programmeTitle.trim().isEmpty()) {
+                    if (matched != null && !programmeTitle.trim().isEmpty() &&
+                            stop > now && start < now + REFRESH_INTERVAL_MS && stop > start) {
                         String title = programmeTitle.trim();
                         if (title.length() > 180) title = title.substring(0, 180);
+                        String details = programmeDescription.length() > 2000 ?
+                                programmeDescription.substring(0, 2000) : programmeDescription;
                         for (long id : matched) {
-                            ChannelDatabase.Guide guide = guides.computeIfAbsent(id,
-                                    ignored -> new ChannelDatabase.Guide());
-                            if (start <= now && stop > now &&
-                                    (guide.current.isEmpty() || guide.end <= now)) {
-                                guide.current = title;
-                                guide.description = programmeDescription.length() > 4000 ?
-                                        programmeDescription.substring(0, 4000) : programmeDescription;
-                                guide.start = start;
-                                guide.end = stop;
-                                applied++;
-                            } else if (start > now && start < now + 18L * 60 * 60 * 1000 &&
-                                    (guide.next.isEmpty() || start < guide.nextStart)) {
-                                guide.next = title;
-                                guide.nextStart = start;
-                                applied++;
-                            }
+                            writer.add(id, start, stop, title, details);
+                            applied++;
                         }
                     }
                     programmeId = "";

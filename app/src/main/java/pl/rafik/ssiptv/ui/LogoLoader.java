@@ -10,17 +10,22 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** Mała pamięć podręczna logotypów/posterów. Brak dostępu sieciowego z wątku UI. */
 public final class LogoLoader {
-    private static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(4 * 1024) {
+    private static final LruCache<String, Bitmap> CACHE = new LruCache<String, Bitmap>(8 * 1024) {
         @Override protected int sizeOf(String key, Bitmap value) {
             return Math.max(1, value.getByteCount() / 1024);
         }
     };
     private static final ExecutorService POOL = Executors.newFixedThreadPool(4);
+    private static final ConcurrentHashMap<String, ArrayList<WeakReference<ImageView>>> PENDING =
+            new ConcurrentHashMap<>();
     private LogoLoader() {}
 
     public static void reduceMemoryForPlayback() {
@@ -42,13 +47,26 @@ public final class LogoLoader {
             view.setImageBitmap(cached);
             return;
         }
+        ArrayList<WeakReference<ImageView>> waiting = new ArrayList<>();
+        ArrayList<WeakReference<ImageView>> existing = PENDING.putIfAbsent(address, waiting);
+        if (existing != null) {
+            synchronized (existing) { existing.add(new WeakReference<>(view)); }
+            return;
+        }
+        synchronized (waiting) { waiting.add(new WeakReference<>(view)); }
         POOL.execute(() -> {
             Bitmap bitmap = fetch(address);
-            if (bitmap == null) return;
-            CACHE.put(address, bitmap);
-            view.post(() -> {
-                if (address.equals(view.getTag())) view.setImageBitmap(bitmap);
-            });
+            if (bitmap != null) CACHE.put(address, bitmap);
+            ArrayList<WeakReference<ImageView>> listeners = PENDING.remove(address);
+            if (bitmap == null || listeners == null) return;
+            synchronized (listeners) {
+                for (WeakReference<ImageView> listener : listeners) {
+                    ImageView image = listener.get();
+                    if (image != null) image.post(() -> {
+                        if (address.equals(image.getTag())) image.setImageBitmap(bitmap);
+                    });
+                }
+            }
         });
     }
 

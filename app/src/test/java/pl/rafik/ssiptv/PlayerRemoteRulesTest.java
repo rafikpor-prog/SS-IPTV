@@ -28,4 +28,16 @@ public final class PlayerRemoteRulesTest {
         assertEquals(-1, PlayerRemoteRules.channelStepForKeyCode(88));
         assertEquals(0, PlayerRemoteRules.channelStepForKeyCode(24)); // głośność
     }
+
+    @Test public void vodArrowsNavigateOsdInsteadOfSeeking() {
+        assertEquals(0, PlayerRemoteRules.vodSeekOffsetForKeyCode(21)); // DPAD_LEFT
+        assertEquals(0, PlayerRemoteRules.vodSeekOffsetForKeyCode(22)); // DPAD_RIGHT
+        assertEquals(0, PlayerRemoteRules.vodSeekOffsetForKeyCode(19)); // DPAD_UP
+        assertEquals(0, PlayerRemoteRules.vodSeekOffsetForKeyCode(20)); // DPAD_DOWN
+    }
+
+    @Test public void vodDedicatedMediaKeysStillSeek() {
+        assertEquals(-30_000, PlayerRemoteRules.vodSeekOffsetForKeyCode(89));
+        assertEquals(30_000, PlayerRemoteRules.vodSeekOffsetForKeyCode(90));
+    }
 }

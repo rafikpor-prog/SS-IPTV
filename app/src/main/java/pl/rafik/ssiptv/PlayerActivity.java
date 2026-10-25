@@ -1225,6 +1225,7 @@ public final class PlayerActivity extends Activity {
         if (!channel.vod)
             actionsLine.addView(instruction, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout actions = Ui.row(this);
+        View vodAudioAction = null;
         if (channel.vod) {
             addColorAction(actions, "−30s", R.drawable.ic_seek_back, Ui.SECONDARY,
                     v -> seekVod(-30_000));
@@ -1232,7 +1233,7 @@ public final class PlayerActivity extends Activity {
                     v -> toggleVodPause());
             addColorAction(actions, "+30s", R.drawable.ic_seek_forward, Ui.SECONDARY,
                     v -> seekVod(30_000));
-            addColorAction(actions, "Audio", R.drawable.ic_audio_track, Ui.ACCENT,
+            vodAudioAction = addColorAction(actions, "Audio", R.drawable.ic_audio_track, Ui.ACCENT,
                     v -> showAudioTracks());
             addColorAction(actions, "Napisy", R.drawable.ic_subtitles, Ui.ACCENT,
                     v -> showSubtitleTracks());
@@ -1241,6 +1242,18 @@ public final class PlayerActivity extends Activity {
         addColorAction(actions, "OSD", R.drawable.ic_player_info, 0xFF35AD83, v -> toggleOsd());
         addColorAction(actions, "Opis", R.drawable.ic_nav_epg, 0xFFE2B456, v -> toggleDescription());
         addColorAction(actions, "Ustawienia", R.drawable.ic_nav_settings, 0xFF5792D4, v -> toggleSettings());
+        // Na Android TV wyszukiwanie najbliższego widoku potrafi przeskoczyć z
+        // przycisków VOD na serduszko nad nimi. Stała kolejność D-pada temu zapobiega.
+        for (int i = 0; i < actions.getChildCount(); i++)
+            actions.getChildAt(i).setId(View.generateViewId());
+        for (int i = 0; i < actions.getChildCount(); i++) {
+            View action = actions.getChildAt(i);
+            if (i > 0) action.setNextFocusLeftId(actions.getChildAt(i - 1).getId());
+            if (i + 1 < actions.getChildCount())
+                action.setNextFocusRightId(actions.getChildAt(i + 1).getId());
+        }
+        // OK lub pierwsza strzałka uruchamia nawigację przy wyborze audio.
+        if (vodAudioAction != null) firstOsdAction = vodAudioAction;
         if (channel.vod) {
             HorizontalScrollView scrollActions = new HorizontalScrollView(this);
             scrollActions.setHorizontalScrollBarEnabled(false);
@@ -1786,6 +1799,8 @@ public final class PlayerActivity extends Activity {
     private boolean handleRemoteKey(int keyCode) {
         int channelStep = PlayerRemoteRules.channelStepForKeyCode(keyCode);
         if (channelStep != 0 && !channel.vod) { zap(channelStep); return true; }
+        int vodSeekOffset = PlayerRemoteRules.vodSeekOffsetForKeyCode(keyCode);
+        if (channel.vod && vodSeekOffset != 0) { seekVod(vodSeekOffset); return true; }
         if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
             typeDigit(keyCode - KeyEvent.KEYCODE_0);
             return true;
@@ -1804,10 +1819,16 @@ public final class PlayerActivity extends Activity {
             case KeyEvent.KEYCODE_DPAD_UP:
                 if (PlayerRemoteRules.shouldZapWithArrows(channel.vod, settingsPanel != null,
                         osdNavigationMode, descriptionOpen)) { zap(1); return true; }
+                if (channel.vod && settingsPanel == null && !osdNavigationMode && !descriptionOpen) {
+                    enterOsdNavigation(); return true;
+                }
                 return false;
             case KeyEvent.KEYCODE_DPAD_DOWN:
                 if (PlayerRemoteRules.shouldZapWithArrows(channel.vod, settingsPanel != null,
                         osdNavigationMode, descriptionOpen)) { zap(-1); return true; }
+                if (channel.vod && settingsPanel == null && !osdNavigationMode && !descriptionOpen) {
+                    enterOsdNavigation(); return true;
+                }
                 return false;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -1819,11 +1840,7 @@ public final class PlayerActivity extends Activity {
                 return false;
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (!osdNavigationMode && settingsPanel == null) {
-                    if (channel.vod) {
-                        seekVod(keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -30_000 : 30_000);
-                        return true;
-                    }
+                if (!osdNavigationMode && settingsPanel == null && !descriptionOpen) {
                     enterOsdNavigation(); return true;
                 }
                 return false;

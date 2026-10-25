@@ -20,6 +20,16 @@ public final class PlayerRemoteRules {
         }
     }
 
+    /** Przewijanie VOD tylko dedykowanymi klawiszami multimedialnymi.
+     * Strzałki D-pada 21/22 muszą pozostać dostępne do wyboru audio i napisów. */
+    public static int vodSeekOffsetForKeyCode(int keyCode) {
+        switch (keyCode) {
+            case 89: return -30_000; // KEYCODE_MEDIA_REWIND
+            case 90: return 30_000;  // KEYCODE_MEDIA_FAST_FORWARD
+            default: return 0;
+        }
+    }
+
     public static boolean shouldZapWithArrows(boolean vod, boolean settingsVisible,
                                               boolean osdControlsFocused, boolean descriptionVisible) {
         return !vod && !settingsVisible && !osdControlsFocused && !descriptionVisible;

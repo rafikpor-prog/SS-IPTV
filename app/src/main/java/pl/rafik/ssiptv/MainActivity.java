@@ -1057,11 +1057,12 @@ public final class MainActivity extends Activity {
         page.addView(summary, Ui.margins(this, -1, -2, 0, 0, 0, 20));
 
         page.addView(Ui.text(this, "ŹRÓDŁA XMLTV", 11, Ui.MUTED, true));
-        for (int i = 0; i < EpgSync.SOURCES.length; i++) {
+        java.util.List<String> guideSources = EpgSync.configuredSources(secure);
+        for (int i = 0; i < guideSources.size(); i++) {
             LinearLayout row = Ui.column(this);
             row.setPadding(Ui.dp(this, 13), Ui.dp(this, 11), Ui.dp(this, 10), Ui.dp(this, 11));
             row.setBackground(Ui.rounded(this, Ui.SURFACE, 13));
-            TextView address = Ui.text(this, EpgSync.SOURCES[i], 11, Ui.SECONDARY, false);
+            TextView address = Ui.text(this, guideSources.get(i), 11, Ui.SECONDARY, false);
             address.setMaxLines(2);
             row.addView(address);
             row.addView(Ui.text(this, secure.epgSourceStatus(i), 12,
@@ -1099,7 +1100,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.8.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1140,6 +1141,22 @@ public final class MainActivity extends Activity {
                         showTab("Ustawienia");
                     }), Ui.margins(this, -1, -2, 0, 0, 0, 6));
         }
+        playerCard.addView(Ui.button(this,
+                secure.fillSdScreen() ? "SD: wypełnianie ekranu włączone" :
+                        "SD: oryginalne proporcje obrazu", false, v -> {
+                    secure.setFillSdScreen(!secure.fillSdScreen());
+                    showTab("Ustawienia");
+                }), Ui.margins(this, -1, -2, 0, 8, 0, 6));
+        playerCard.addView(Ui.text(this,
+                "Wypełnianie SD usuwa boczne pasy bez obcinania obrazu, " +
+                        "ale może lekko rozciągać proporcje 4:3.", 11,
+                Ui.SECONDARY, false));
+        playerCard.addView(Ui.button(this,
+                secure.subtitlesEnabled() ? "Napisy: domyślnie włączone" :
+                        "Napisy: domyślnie wyłączone", false, v -> {
+                    secure.setSubtitlesEnabled(!secure.subtitlesEnabled());
+                    showTab("Ustawienia");
+                }), Ui.margins(this, -1, -2, 0, 0, 0, 6));
         page.addView(playerCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout playlistsCard = card();

@@ -16,7 +16,6 @@ import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.URL;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -24,7 +23,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.GZIPInputStream;
 
@@ -38,7 +36,10 @@ public final class EpgSync {
             "https://epg.ovh/pl.gz",
             "https://epg.ovh/plar.gz",
             "https://epg.ovh/pltv.gz",
-            "https://epg.polishteam.one/guide.xml"
+            "https://epg.polishteam.one/guide.xml",
+            "https://epg.ovh/pltv.xml",
+            "https://epg.ovh/pl.xml",
+            "https://epg.ovh/plar.xml"
     };
     // Źródło epg.ovh publikuje pięciodniowe przewodniki. Harmonogram programów
     // zapisujemy w SQLite i aktualizujemy tylko po pięciu dniach.
@@ -116,6 +117,7 @@ public final class EpgSync {
                 writer.commit();
                 stored = matched;
                 sourceOk = i;
+                settings.savePreferredEpgSource(url);
                 settings.saveEpgSourceStatus(i, "Zapisano " + matched +
                         " audycji • " +
                         new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
@@ -143,7 +145,14 @@ public final class EpgSync {
     public static List<String> configuredSources(SecureSettings settings) {
         List<String> sources = new ArrayList<>();
         if (!settings.customEpgUrl().isEmpty()) sources.add(settings.customEpgUrl());
-        java.util.Collections.addAll(sources, SOURCES);
+        String preferred = settings.preferredEpgSource();
+        if (!preferred.isEmpty() && !sources.contains(preferred)) {
+            for (String source : SOURCES) if (source.equals(preferred)) {
+                sources.add(preferred);
+                break;
+            }
+        }
+        for (String source : SOURCES) if (!sources.contains(source)) sources.add(source);
         return sources;
     }
 
@@ -177,8 +186,8 @@ public final class EpgSync {
                                   ChannelDatabase.EpgImport writer,
                                   long now) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(address).openConnection();
-        conn.setConnectTimeout(6500);
-        conn.setReadTimeout(18000);
+        conn.setConnectTimeout(4000);
+        conn.setReadTimeout(10000);
         conn.setRequestProperty("Accept-Encoding", "gzip");
         conn.setRequestProperty("User-Agent", "SS-IPTV/1.0 (XMLTV)");
         try {
@@ -187,7 +196,7 @@ public final class EpgSync {
             }
             try (InputStream raw = conn.getInputStream()) {
                 InputStream decoded = "gzip".equalsIgnoreCase(conn.getContentEncoding()) ||
-                        address.endsWith(".gz") ? new GZIPInputStream(raw) : raw;
+                        new URL(address).getPath().endsWith(".gz") ? new GZIPInputStream(raw) : raw;
                 InputStream bounded = new FilterInputStream(decoded) {
                     long readCount;
                     @Override public int read() throws IOException {
@@ -242,8 +251,19 @@ public final class EpgSync {
                     }
                 } else if ("programme".equals(tag)) {
                     programmeId = parser.getAttributeValue(null, "channel");
-                    start = parseDate(parser.getAttributeValue(null, "start"));
-                    stop = parseDate(parser.getAttributeValue(null, "stop"));
+                    // Przewodniki zawierają dziesiątki tysięcy obcych stacji.
+                    // Omijamy ich CAŁE rekordy: zero tekstu, dat i zapisu SQLite.
+                    List<Long> programmeMatches = ids.get(programmeId);
+                    if (programmeMatches == null)
+                        programmeMatches = matchingIds(keys, programmeId);
+                    if (programmeMatches == null || programmeMatches.isEmpty()) {
+                        skipElement(parser);
+                        programmeId = "";
+                        type = parser.next();
+                        continue;
+                    }
+                    start = EpgDateParser.parse(parser.getAttributeValue(null, "start"));
+                    stop = EpgDateParser.parse(parser.getAttributeValue(null, "stop"));
                     programmeTitle = "";
                     programmeDescription = "";
                 } else if ("title".equals(tag) && programmeId != null && !programmeId.isEmpty()) {
@@ -284,22 +304,13 @@ public final class EpgSync {
         return applied;
     }
 
-    private static long parseDate(String xmlDate) {
-        if (xmlDate == null) return 0;
-        String[] parts = xmlDate.trim().split("\\s+");
-        if (parts.length == 0 || parts[0].length() < 12) return 0;
-        String digits = parts[0];
-        if (digits.length() == 12) digits += "00";
-        if (digits.length() < 14) return 0;
-        String zone = parts.length > 1 && parts[1].matches("[+-][0-9]{4}") ? parts[1] : "+0000";
-        SimpleDateFormat format = new SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US);
-        format.setLenient(false);
-        format.setTimeZone(TimeZone.getTimeZone("UTC"));
-        try {
-            Date parsed = format.parse(digits.substring(0, 14) + " " + zone);
-            return parsed == null ? 0 : parsed.getTime();
-        } catch (ParseException e) {
-            return 0;
+    private static void skipElement(XmlPullParser parser) throws Exception {
+        int depth = 1;
+        while (depth > 0) {
+            int event = parser.next();
+            if (event == XmlPullParser.START_TAG) depth++;
+            else if (event == XmlPullParser.END_TAG) depth--;
+            else if (event == XmlPullParser.END_DOCUMENT) return;
         }
     }
 }

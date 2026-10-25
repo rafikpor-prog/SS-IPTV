@@ -114,6 +114,30 @@ public final class SecureSettings {
         invalidateEpgCache();
     }
 
+    public String preferredEpgSource() {
+        return prefs.getString("preferred_epg_source", "");
+    }
+
+    public void savePreferredEpgSource(String url) {
+        prefs.edit().putString("preferred_epg_source", url).apply();
+    }
+
+    public boolean fillSdScreen() {
+        return prefs.getBoolean("fill_sd_screen", true);
+    }
+
+    public void setFillSdScreen(boolean enabled) {
+        prefs.edit().putBoolean("fill_sd_screen", enabled).apply();
+    }
+
+    public boolean subtitlesEnabled() {
+        return prefs.getBoolean("subtitles_enabled", false);
+    }
+
+    public void setSubtitlesEnabled(boolean enabled) {
+        prefs.edit().putBoolean("subtitles_enabled", enabled).apply();
+    }
+
     public long lastSync() {
         return prefs.getLong("epg_last_sync", 0);
     }

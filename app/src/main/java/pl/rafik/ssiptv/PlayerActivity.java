@@ -12,6 +12,8 @@ import android.net.TrafficStats;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaPlayer;
+import android.media.MediaFormat;
+import android.media.TimedText;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -49,7 +51,9 @@ import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.ExoPlaybackException;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -87,7 +91,7 @@ public final class PlayerActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService storage = Executors.newSingleThreadExecutor();
     private ExoPlayer player;
-    private VideoView platformView;
+    private FullscreenVideoView platformView;
     private MediaPlayer platformPlayer;
     private Player.Listener exoListener;
     private DefaultHttpDataSource.Factory httpFactory;
@@ -111,6 +115,10 @@ public final class PlayerActivity extends Activity {
     private int startupRetries;
     private boolean retryScheduled;
     private String selectedEngine = "android";
+    private String activeEngine = "android";
+    private boolean codecFallbackAttempted;
+    private boolean unavailablePending;
+    private TextView subtitleText;
     private long lastPlaybackEventAt;
     private long lastSamplePosition = -1;
     private long lastSampleTraffic = -1;
@@ -206,6 +214,28 @@ public final class PlayerActivity extends Activity {
         }
     };
 
+    /** Domyślne VideoView pomniejsza obraz SD 4:3. Ten wariant wypełnia powierzchnię
+     * bez przycinania kadru (na ekranie 16:9 obraz 4:3 może być rozciągnięty). */
+    private static final class FullscreenVideoView extends VideoView {
+        private boolean fillScreen;
+
+        FullscreenVideoView(android.content.Context context) { super(context); }
+
+        void setFillScreen(boolean fill) {
+            if (fillScreen != fill) {
+                fillScreen = fill;
+                requestLayout();
+            }
+        }
+
+        @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            if (fillScreen) {
+                setMeasuredDimension(View.MeasureSpec.getSize(widthMeasureSpec),
+                        View.MeasureSpec.getSize(heightMeasureSpec));
+            } else super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+    }
+
     @Override public void onCreate(@Nullable Bundle saved) {
         super.onCreate(saved);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
@@ -242,7 +272,7 @@ public final class PlayerActivity extends Activity {
         root.setFocusable(true);
         root.setFocusableInTouchMode(true);
         setContentView(root);
-        platformView = new VideoView(this);
+        platformView = new FullscreenVideoView(this);
         platformView.setVisibility(View.GONE);
         platformView.setFocusable(false);
         platformView.setFocusableInTouchMode(false);
@@ -263,6 +293,16 @@ public final class PlayerActivity extends Activity {
         vlcView.setVisibility(View.GONE);
         vlcView.setFocusable(false);
         root.addView(vlcView, new FrameLayout.LayoutParams(-1, -1));
+
+        subtitleText = Ui.text(this, "", 21, Ui.WHITE, true);
+        subtitleText.setGravity(Gravity.CENTER);
+        subtitleText.setShadowLayer(4f, 1f, 2f, Color.BLACK);
+        subtitleText.setPadding(Ui.dp(this, 26), Ui.dp(this, 9),
+                Ui.dp(this, 26), Ui.dp(this, 9));
+        FrameLayout.LayoutParams subtitles = new FrameLayout.LayoutParams(-1, -2,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        subtitles.bottomMargin = Ui.dp(this, 32);
+        root.addView(subtitleText, subtitles);
 
         LogoLoader.reduceMemoryForPlayback();
         addLoadingIndicator(root);
@@ -307,6 +347,13 @@ public final class PlayerActivity extends Activity {
         engineSwaps = 0;
         startupRetries = 0;
         retryScheduled = false;
+        unavailablePending = false;
+        codecFallbackAttempted = false;
+        if (subtitleText != null) subtitleText.setText("");
+        if (audioWarning != null) {
+            audioWarning.setText("");
+            audioWarning.setVisibility(View.GONE);
+        }
         firstFrameReady = false;
         hasVlcVideoOutput = false;
         lastSamplePosition = -1;
@@ -319,22 +366,71 @@ public final class PlayerActivity extends Activity {
         try { stream = resolveStream(); }
         catch (Exception error) {
             Log.w("SS-IPTV-Player", "Invalid stream", error);
-            setPlaybackStatus("Nie można odczytać adresu strumienia");
+            showSourceUnavailable();
             return;
         }
         String path = stream.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
         adaptiveStream = path.endsWith(".m3u8") || path.endsWith(".mpd");
         selectedEngine = new SecureSettings(this).playbackEngine();
+        activeEngine = selectedEngine;
         startSelectedEngine(stream);
     }
 
     /** W awarii sieci i buforowania ponawiamy tylko wybrany przez użytkownika silnik. */
     private void startSelectedEngine(StreamSpec stream) {
-        switch (selectedEngine) {
+        switch (activeEngine) {
             case "vlc": startVlc(stream); break;
             case "media3": startExo(stream); break;
             default: startPlatform(stream); break;
         }
+    }
+
+    /** Jednorazowe przejście na bibliotekę z dodatkowymi kodekami WYŁĄCZNIE
+     * po zdiagnozowaniu audio; awaria sieci nadal korzysta z tego samego silnika. */
+    private void fallbackForAudioCodec(String codec) {
+        if (leftScreen || codecFallbackAttempted || usingVlc) return;
+        codecFallbackAttempted = true;
+        activeEngine = "vlc";
+        if (channel.vod) rememberVodPosition();
+        if (audioWarning != null) {
+            audioWarning.setText("Kodek " + codec + " · dekodowanie VLC");
+            audioWarning.setVisibility(View.VISIBLE);
+        }
+        showLoading("Dostosowuję dekoder audio · VLC");
+        long generation = playGeneration;
+        handler.post(() -> {
+            if (generation != playGeneration || leftScreen) return;
+            try { startVlc(resolveStream()); }
+            catch (Exception e) { recoverPlayback("Nie można włączyć dekodera audio"); }
+        });
+    }
+
+    private boolean nativeAudioUnsupported(MediaPlayer nativePlayer) {
+        try {
+            int knownAudio = 0;
+            MediaCodecList codecs = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+            MediaPlayer.TrackInfo[] tracks = nativePlayer.getTrackInfo();
+            for (int i = 0; i < tracks.length; i++) {
+                MediaPlayer.TrackInfo info = tracks[i];
+                if (info.getTrackType() != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) continue;
+                MediaFormat format = info.getFormat();
+                if (format == null || !format.containsKey(MediaFormat.KEY_MIME)) return false;
+                String mime = format.getString(MediaFormat.KEY_MIME);
+                if (mime == null || !mime.startsWith("audio/")) return false;
+                knownAudio++;
+                if (codecs.findDecoderForFormat(format) != null) {
+                    // Jeśli system nie wybrał żadnej ścieżki, wskaż pierwszą
+                    // obsługiwaną przez MediaCodec, zamiast odtwarzać niemy obraz.
+                    try {
+                        if (nativePlayer.getSelectedTrack(
+                                MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) < 0)
+                            nativePlayer.selectTrack(i);
+                    } catch (RuntimeException ignored) { }
+                    return false;
+                }
+            }
+            return knownAudio > 0;
+        } catch (Exception ignored) { return false; }
     }
 
     private String engineName() {
@@ -406,6 +502,26 @@ public final class PlayerActivity extends Activity {
         platformView.setOnPreparedListener(nativePlayer -> {
             if (generation != playGeneration || leftScreen) return;
             platformPlayer = nativePlayer;
+            if (nativeAudioUnsupported(nativePlayer)) {
+                fallbackForAudioCodec("nieobsługiwany przez Android");
+                return;
+            }
+            nativePlayer.setOnTimedTextListener((mp, timedText) -> {
+                if (generation == playGeneration && subtitleText != null)
+                    subtitleText.setText(timedText == null ? "" : timedText.getText());
+            });
+            nativePlayer.setOnVideoSizeChangedListener((mp, width, height) -> {
+                if (generation == playGeneration) showQuality(height);
+            });
+            if (!new SecureSettings(this).subtitlesEnabled()) {
+                try {
+                    for (int type : new int[]{MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_SUBTITLE,
+                            MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT}) {
+                        int selected = nativePlayer.getSelectedTrack(type);
+                        if (selected >= 0) nativePlayer.deselectTrack(selected);
+                    }
+                } catch (RuntimeException ignored) { }
+            }
             if (channel.vod && channel.playbackMs > 0)
                 platformView.seekTo((int) Math.min(Integer.MAX_VALUE, channel.playbackMs));
             if (nativePlayer.getVideoHeight() > 0)
@@ -414,6 +530,8 @@ public final class PlayerActivity extends Activity {
                 if (generation != playGeneration || !usingPlatform || leftScreen) return true;
                 if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
                     markFirstFrameReady("Android");
+                } else if (what == MediaPlayer.MEDIA_INFO_AUDIO_NOT_PLAYING) {
+                    fallbackForAudioCodec("audio bez dźwięku");
                 } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
                     if (!firstFrameReady || !platformView.isPlaying())
                         showLoading("Android · Oczekiwanie na dane strumienia");
@@ -429,7 +547,9 @@ public final class PlayerActivity extends Activity {
         platformView.setOnErrorListener((mp, what, extra) -> {
             if (generation == playGeneration && usingPlatform && !leftScreen) {
                 Log.w("SS-IPTV-Player", "System MediaPlayer error " + what + "/" + extra);
-                recoverPlayback("Android: błąd strumienia " + what);
+                if (what == MediaPlayer.MEDIA_ERROR_UNSUPPORTED)
+                    fallbackForAudioCodec("nieobsługiwany format");
+                else recoverPlayback("Android: błąd strumienia " + what);
             }
             return true;
         });
@@ -495,6 +615,7 @@ public final class PlayerActivity extends Activity {
             }
             org.videolan.libvlc.MediaPlayer nativePlayer = vlcPlayer;
             final boolean[] resumedVod = {false};
+            final boolean[] subtitlesInitialized = {false};
             // Zawsze pokazujemy cały kadr: bez crop, rozciągania i zoomu.
             nativePlayer.setScale(0f);
             nativePlayer.setAspectRatio(null);
@@ -523,6 +644,11 @@ public final class PlayerActivity extends Activity {
                 long now = SystemClock.elapsedRealtime();
                 switch (type) {
                     case org.videolan.libvlc.MediaPlayer.Event.Playing:
+                        if (!subtitlesInitialized[0]) {
+                            subtitlesInitialized[0] = true;
+                            if (!new SecureSettings(this).subtitlesEnabled())
+                                nativePlayer.setSpuTrack(-1);
+                        }
                         if (channel.vod && !resumedVod[0]) {
                             resumedVod[0] = true;
                             if (channel.playbackMs > 0) nativePlayer.setTime(channel.playbackMs);
@@ -641,6 +767,12 @@ public final class PlayerActivity extends Activity {
             playerView.setPlayer(exo);
             playerView.setUseController(channel.vod);
             playerView.requestFocus();
+            SecureSettings playbackSettings = new SecureSettings(this);
+            exo.setTrackSelectionParameters(exo.getTrackSelectionParameters().buildUpon()
+                    .setPreferredAudioLanguage("pl")
+                    .setPreferredTextLanguage("pl")
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !playbackSettings.subtitlesEnabled())
+                    .build());
             MediaItem.Builder media = new MediaItem.Builder().setUri(spec.url);
             String path = spec.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
             if (path.endsWith(".m3u8")) media.setMimeType(MimeTypes.APPLICATION_M3U8);
@@ -665,12 +797,12 @@ public final class PlayerActivity extends Activity {
                     }
                     if (audioWarning != null) {
                         audioWarning.setText(audioFound && !audioSupported ?
-                                "Brak dekodera audio · spróbuj VLC" : "");
+                                "Brak kodeka audio · uruchamiam VLC" : "");
                         audioWarning.setVisibility(audioFound && !audioSupported ?
                                 View.VISIBLE : View.GONE);
                     }
-                    // Kodek audio nie jest dostępny: pokaż ostrzeżenie, ale nie
-                    // przełączaj odtwarzacza bez decyzji użytkownika.
+                    if (audioFound && !audioSupported)
+                        fallbackForAudioCodec("nieobsługiwany przez Media3");
                 }
                 @Override public void onPlaybackStateChanged(int state) {
                     if (generation != playGeneration) return;
@@ -691,7 +823,15 @@ public final class PlayerActivity extends Activity {
                 @Override public void onPlayerError(PlaybackException error) {
                     if (generation != playGeneration) return;
                     Log.w("SS-IPTV-Player", "Media3 " + error.getErrorCodeName());
-                    recoverPlayback("Media3: " + error.getErrorCodeName());
+                    if (isUnavailableHttp(error)) {
+                        showSourceUnavailable();
+                    } else if (error instanceof ExoPlaybackException &&
+                            ((ExoPlaybackException) error).rendererFormat != null &&
+                            ((ExoPlaybackException) error).rendererFormat.sampleMimeType != null &&
+                            ((ExoPlaybackException) error).rendererFormat.sampleMimeType
+                                    .startsWith("audio/")) {
+                        fallbackForAudioCodec("błąd dekodowania ścieżki");
+                    } else recoverPlayback("Media3: " + error.getErrorCodeName());
                 }
                 @Override public void onRenderedFirstFrame() {
                     if (generation == playGeneration) markFirstFrameReady("Media3");
@@ -808,9 +948,15 @@ public final class PlayerActivity extends Activity {
     }
 
     private void recoverPlayback(String reason) {
-        if (leftScreen || isFinishing() || isDestroyed() || retryScheduled) return;
+        if (leftScreen || isFinishing() || isDestroyed() || retryScheduled ||
+                unavailablePending) return;
         Log.w("SS-IPTV-Player", reason + " | engine=" + engineName());
         boolean networkAvailable = NetworkIndicator.read(this).connected;
+        if (UnavailableChannelPolicy.shouldAdvance(channel.vod, networkAvailable,
+                firstFrameReady, startupRetries)) {
+            showSourceUnavailable();
+            return;
+        }
         if (channel.vod) rememberVodPosition();
         showOsd();
         // Przy HLS/DASH ogranicz bitrate w działającym Media3, bez przełączania
@@ -838,6 +984,40 @@ public final class PlayerActivity extends Activity {
             try { startSelectedEngine(resolveStream()); }
             catch (Exception error) { recoverPlayback("Błędny adres strumienia"); }
         }, delaySeconds * 1000L);
+    }
+
+    /** Błędy HTTP oznaczające martwy albo odrzucony adres, a nie zwykłe buforowanie. */
+    private static boolean isUnavailableHttp(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof HttpDataSource.InvalidResponseCodeException) {
+                int code = ((HttpDataSource.InvalidResponseCodeException) cause).responseCode;
+                return code == 401 || code == 403 || code == 404 || code == 410;
+            }
+        }
+        return false;
+    }
+
+    private void showSourceUnavailable() {
+        if (unavailablePending || leftScreen) return;
+        unavailablePending = true;
+        retryScheduled = true;
+        String message = channel.vod ? "Materiał jest niedostępny. Sprawdź adres lub serwer." :
+                "Źródło kanału niedostępne · kolejny kanał za 5 sekund";
+        showLoading(message);
+        if (loadingSpinner != null) {
+            loadingSpinner.clearAnimation();
+            loadingSpinner.setVisibility(View.GONE);
+        }
+        setPlaybackStatus(message);
+        showOsd();
+        if (channel.vod) return;
+        long generation = playGeneration;
+        handler.postDelayed(() -> {
+            if (generation != playGeneration || leftScreen || isFinishing()) return;
+            unavailablePending = false;
+            retryScheduled = false;
+            zap(1);
+        }, 5000);
     }
 
     private void rememberVodPosition() {
@@ -906,6 +1086,8 @@ public final class PlayerActivity extends Activity {
 
     private void showLoading(String state) {
         if (loadingOverlay == null) return;
+        if (!unavailablePending && loadingSpinner != null)
+            loadingSpinner.setVisibility(View.VISIBLE);
         loadingChannel.setText(channel.name);
         loadingMessage.setText(state);
         if (loadingOverlay.getVisibility() != View.VISIBLE) {
@@ -1044,12 +1226,16 @@ public final class PlayerActivity extends Activity {
             actionsLine.addView(instruction, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout actions = Ui.row(this);
         if (channel.vod) {
-            addColorAction(actions, "−30s", R.drawable.ic_nav_history, Ui.SECONDARY,
+            addColorAction(actions, "−30s", R.drawable.ic_seek_back, Ui.SECONDARY,
                     v -> seekVod(-30_000));
             addColorAction(actions, "Pauza/Play", R.drawable.ic_player_play, Ui.ACCENT,
                     v -> toggleVodPause());
-            addColorAction(actions, "+30s", R.drawable.ic_nav_history, Ui.SECONDARY,
+            addColorAction(actions, "+30s", R.drawable.ic_seek_forward, Ui.SECONDARY,
                     v -> seekVod(30_000));
+            addColorAction(actions, "Audio", R.drawable.ic_audio_track, Ui.ACCENT,
+                    v -> showAudioTracks());
+            addColorAction(actions, "Napisy", R.drawable.ic_subtitles, Ui.ACCENT,
+                    v -> showSubtitleTracks());
         }
         firstOsdAction = addColorAction(actions, "Ulubione", R.drawable.ic_nav_heart, 0xFFDD5165, v -> toggleFavorite());
         addColorAction(actions, "OSD", R.drawable.ic_player_info, 0xFF35AD83, v -> toggleOsd());
@@ -1068,6 +1254,7 @@ public final class PlayerActivity extends Activity {
     }
 
     private void showQuality(int height) {
+        updateVideoSizing(height);
         if (quality == null) return;
         String label;
         int color;
@@ -1078,6 +1265,20 @@ public final class PlayerActivity extends Activity {
         else { label = "AUTO"; color = 0xFF526175; }
         quality.setText(label);
         quality.setBackground(Ui.rounded(this, color, 8));
+    }
+
+    private void updateVideoSizing(int height) {
+        boolean stretch = height > 0 && height <= 576 &&
+                new SecureSettings(this).fillSdScreen();
+        if (playerView != null) playerView.setResizeMode(stretch ?
+                AspectRatioFrameLayout.RESIZE_MODE_FILL : AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        if (platformView != null) platformView.setFillScreen(stretch);
+        if (usingVlc && vlcPlayer != null) {
+            if (stretch) {
+                android.util.DisplayMetrics display = getResources().getDisplayMetrics();
+                vlcPlayer.setAspectRatio(display.widthPixels + ":" + display.heightPixels);
+            } else vlcPlayer.setAspectRatio(null);
+        }
     }
 
     private void showOsd() {
@@ -1264,11 +1465,21 @@ public final class PlayerActivity extends Activity {
                     engine.equals(settings.playbackEngine()), v -> {
                         settings.setPlaybackEngine(engine);
                         toggleSettings();
-                        if (!engine.equals(selectedEngine)) startPlayback();
+                        if (!engine.equals(activeEngine)) startPlayback();
                     }), Ui.margins(this, -1, -2, 0, 4, 0, 4));
         }
         settingsBody.addView(Ui.button(this, "Wybierz ścieżkę dźwięku", false,
                 v -> showAudioTracks()), Ui.margins(this, -1, -2, 0, 9, 0, 5));
+        settingsBody.addView(Ui.button(this, "Ścieżki napisów / wyłącz napisy", false,
+                v -> showSubtitleTracks()), Ui.margins(this, -1, -2, 0, 6, 0, 5));
+        settingsBody.addView(Ui.button(this,
+                settings.fillSdScreen() ? "SD: wypełniaj ekran (wyłącz)" :
+                        "SD: zachowuj proporcje (włącz wypełnianie)", false, v -> {
+                    settings.setFillSdScreen(!settings.fillSdScreen());
+                    showQuality(currentVideoHeight());
+                    toggleSettings();
+                    toggleSettings();
+                }), Ui.margins(this, -1, -2, 0, 6, 0, 5));
         String active = settings.activeSource();
         settingsBody.addView(Ui.button(this, active.isEmpty() ?
                 "Wszystkie listy (aktywne)" : "Wszystkie listy", active.isEmpty(), v -> {
@@ -1295,6 +1506,32 @@ public final class PlayerActivity extends Activity {
 
     /** Wybór alternatywnej ścieżki dźwiękowej, gdy pierwsza w strumieniu milczy. */
     private void showAudioTracks() {
+        if (usingPlatform) {
+            if (platformPlayer == null) { noTracks("Dźwięk", "Odtwarzacz jeszcze wczytuje ścieżki."); return; }
+            try {
+                MediaPlayer.TrackInfo[] info = platformPlayer.getTrackInfo();
+                ArrayList<Integer> indices = new ArrayList<>();
+                ArrayList<String> options = new ArrayList<>();
+                int selected = platformPlayer.getSelectedTrack(MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO);
+                for (int i = 0; i < info.length; i++) {
+                    if (info[i].getTrackType() != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) continue;
+                    String lang = info[i].getLanguage();
+                    options.add((selected == i ? "Wybrana: " : "") + "Audio " +
+                            (lang == null ? "" : lang) + " · ścieżka " + (indices.size() + 1));
+                    indices.add(i);
+                }
+                if (indices.isEmpty()) { noTracks("Dźwięk", "Źródło nie zgłasza ścieżek audio."); return; }
+                new AlertDialog.Builder(this).setTitle("Android · ścieżki dźwięku")
+                        .setItems(options.toArray(new String[0]), (d, which) -> {
+                            try { if (platformPlayer != null) platformPlayer.selectTrack(indices.get(which)); }
+                            catch (RuntimeException e) { Toast.makeText(this,
+                                    "Nie można wybrać ścieżki na tym urządzeniu", Toast.LENGTH_LONG).show(); }
+                        }).setNegativeButton("Anuluj", null).show();
+            } catch (RuntimeException e) {
+                noTracks("Dźwięk", "Systemowy dekoder nie udostępnia wyboru ścieżek.");
+            }
+            return;
+        }
         if (usingVlc && vlcPlayer != null) {
             org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getAudioTracks();
             if (tracks == null || tracks.length == 0) {
@@ -1354,6 +1591,113 @@ public final class PlayerActivity extends Activity {
                     player.setTrackSelectionParameters(params.build());
                     showOsd();
                 }).setNegativeButton("Anuluj", null).show();
+    }
+
+    private void noTracks(String title, String message) {
+        new AlertDialog.Builder(this).setTitle(title).setMessage(message)
+                .setPositiveButton("OK", null).show();
+    }
+
+    /** Ścieżki tekstowe i wybór „Wyłącz” we wszystkich trzech silnikach. */
+    private void showSubtitleTracks() {
+        SecureSettings preferences = new SecureSettings(this);
+        if (usingVlc && vlcPlayer != null) {
+            org.videolan.libvlc.MediaPlayer.TrackDescription[] tracks = vlcPlayer.getSpuTracks();
+            ArrayList<String> options = new ArrayList<>();
+            ArrayList<Integer> ids = new ArrayList<>();
+            options.add("Wyłącz napisy");
+            ids.add(-1);
+            if (tracks != null) for (org.videolan.libvlc.MediaPlayer.TrackDescription track : tracks) {
+                if (track.id < 0) continue;
+                options.add((track.id == vlcPlayer.getSpuTrack() ? "Aktywne: " : "") +
+                        track.name);
+                ids.add(track.id);
+            }
+            new AlertDialog.Builder(this).setTitle("VLC · napisy")
+                    .setItems(options.toArray(new String[0]), (dialog, choice) -> {
+                        if (vlcPlayer == null) return;
+                        boolean enabled = choice > 0;
+                        preferences.setSubtitlesEnabled(enabled);
+                        vlcPlayer.setSpuTrack(ids.get(choice));
+                        if (!enabled) subtitleText.setText("");
+                        showOsd();
+                    }).setNegativeButton("Anuluj", null).show();
+            return;
+        }
+        if (usingPlatform) {
+            if (platformPlayer == null) { noTracks("Napisy", "Poczekaj na załadowanie filmu."); return; }
+            try {
+                MediaPlayer.TrackInfo[] infos = platformPlayer.getTrackInfo();
+                ArrayList<Integer> indices = new ArrayList<>();
+                ArrayList<String> options = new ArrayList<>();
+                options.add("Wyłącz napisy");
+                for (int i = 0; i < infos.length; i++) {
+                    int type = infos[i].getTrackType();
+                    if (type != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_SUBTITLE &&
+                            type != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT) continue;
+                    indices.add(i);
+                    options.add("Napisy " + infos[i].getLanguage() + " · " +
+                            (type == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_SUBTITLE ?
+                                    "wbudowane" : "tekstowe"));
+                }
+                new AlertDialog.Builder(this).setTitle("Android · napisy")
+                        .setItems(options.toArray(new String[0]), (dialog, choice) -> {
+                            if (platformPlayer == null) return;
+                            try {
+                                if (choice == 0) {
+                                    for (int type : new int[]{MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_SUBTITLE,
+                                            MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT}) {
+                                        int selected = platformPlayer.getSelectedTrack(type);
+                                        if (selected >= 0) platformPlayer.deselectTrack(selected);
+                                    }
+                                    subtitleText.setText("");
+                                } else platformPlayer.selectTrack(indices.get(choice - 1));
+                                preferences.setSubtitlesEnabled(choice > 0);
+                            } catch (RuntimeException e) {
+                                Toast.makeText(this, "Napisy niedostępne w systemowym dekoderze",
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        }).setNegativeButton("Anuluj", null).show();
+            } catch (RuntimeException e) {
+                noTracks("Napisy", "Urządzenie nie obsługuje wyboru napisów tego źródła.");
+            }
+            return;
+        }
+        if (player == null) { noTracks("Napisy", "Poczekaj na załadowanie filmu."); return; }
+        ArrayList<String> choices = new ArrayList<>();
+        ArrayList<TrackSelectionOverride> overrides = new ArrayList<>();
+        choices.add("Wyłącz napisy");
+        choices.add("Automatycznie (preferuj polskie)");
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_TEXT) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (!group.isTrackSupported(i)) continue;
+                Format format = group.getTrackFormat(i);
+                choices.add((group.isTrackSelected(i) ? "Aktywne: " : "") +
+                        (format.language == null ? "Bez języka" : format.language) +
+                        (format.label == null ? "" : " · " + format.label));
+                overrides.add(new TrackSelectionOverride(group.getMediaTrackGroup(), i));
+            }
+        }
+        new AlertDialog.Builder(this).setTitle("Media3 · napisy")
+                .setItems(choices.toArray(new String[0]), (dialog, choice) -> {
+                    if (player == null) return;
+                    TrackSelectionParameters.Builder params = player.getTrackSelectionParameters()
+                            .buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, choice == 0);
+                    if (choice > 1) params.setOverrideForType(overrides.get(choice - 2));
+                    player.setTrackSelectionParameters(params.build());
+                    preferences.setSubtitlesEnabled(choice > 0);
+                    if (choice == 0) subtitleText.setText("");
+                    showOsd();
+                }).setNegativeButton("Anuluj", null).show();
+    }
+
+    private int currentVideoHeight() {
+        if (usingPlatform && platformPlayer != null) return platformPlayer.getVideoHeight();
+        if (usingVlc && vlcPlayer != null && vlcPlayer.getCurrentVideoTrack() != null)
+            return vlcPlayer.getCurrentVideoTrack().height;
+        return player != null ? player.getVideoSize().height : 0;
     }
 
     private List<Channel> liveChannels() {

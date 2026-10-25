@@ -339,6 +339,7 @@ public final class PlayerActivity extends Activity {
         if (osd.getVisibility() == View.VISIBLE) {
             osd.setVisibility(View.GONE);
             handler.removeCallbacks(hideOsd);
+            if (playerView != null) playerView.requestFocus();
         } else showOsd();
     }
 
@@ -355,7 +356,10 @@ public final class PlayerActivity extends Activity {
                 expandedDescription.setText(title + "\n\n" + body);
                 descriptionScroll.setVisibility(View.VISIBLE);
                 descriptionScroll.requestFocus();
-            } else descriptionScroll.setVisibility(View.GONE);
+            } else {
+                descriptionScroll.setVisibility(View.GONE);
+                if (heart != null) heart.requestFocus();
+            }
         }
         showOsd();
     }
@@ -502,11 +506,11 @@ public final class PlayerActivity extends Activity {
                 case KeyEvent.KEYCODE_CHANNEL_DOWN: zap(-1); return true;
                 case KeyEvent.KEYCODE_DPAD_UP:
                     if (settingsPanel == null && !channel.vod &&
-                            !(descriptionOpen && descriptionScroll.hasFocus())) { zap(1); return true; }
+                            !isOsdNavigationFocused()) { zap(1); return true; }
                     break;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
                     if (settingsPanel == null && !channel.vod &&
-                            !(descriptionOpen && descriptionScroll.hasFocus())) { zap(-1); return true; }
+                            !isOsdNavigationFocused()) { zap(-1); return true; }
                     break;
                 case KeyEvent.KEYCODE_ENTER:
                 case KeyEvent.KEYCODE_DPAD_CENTER:
@@ -540,6 +544,12 @@ public final class PlayerActivity extends Activity {
             }
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    private boolean isOsdNavigationFocused() {
+        if (osd == null || osd.getVisibility() != View.VISIBLE) return false;
+        View focus = getCurrentFocus();
+        return focus != null && focus != playerView && focus != root;
     }
 
     private void updateProgressLabel() {

@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
@@ -14,9 +15,11 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.GridView;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -44,6 +47,7 @@ import pl.rafik.ssiptv.data.SecureSettings;
 import pl.rafik.ssiptv.data.XtreamClient;
 import pl.rafik.ssiptv.epg.EpgSync;
 import pl.rafik.ssiptv.ui.Ui;
+import pl.rafik.ssiptv.ui.LogoLoader;
 
 /** Ekrany główne SS-IPTV. Cały interfejs jest natywny i działa bez WebView. */
 public final class MainActivity extends Activity {
@@ -56,23 +60,29 @@ public final class MainActivity extends Activity {
     private LinearLayout main;
     private LinearLayout content;
     private LinearLayout chips;
-    private ListView channelList;
+    private FrameLayout resultsFrame;
     private TextView sectionCaption;
     private TextView sourceStatus;
     private ChannelAdapter adapter;
-    private String tab = "Kanały";
+    private String tab = "Telewizja";
     private String selectedGroup = ALL;
     private String query = "";
+    private boolean tiled;
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(Ui.BG);
-        getWindow().setNavigationBarColor(Ui.BG);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+        else getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         database = new ChannelDatabase(this);
         secure = new SecureSettings(this);
-        showTab("Kanały");
+        tiled = getPreferences(MODE_PRIVATE).getBoolean("grid", false);
+        showTab("Telewizja");
         reloadData();
         EpgSync.schedule(this);
         EpgSync.refreshIfStale(this);
@@ -95,7 +105,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 allChannels = entries;
                 guides = programs;
-                if ("Kanały".equals(tab)) {
+                if (isCatalogTab()) {
                     updateChips();
                     filterChannels();
                 } else if ("EPG".equals(tab)) {
@@ -106,17 +116,36 @@ public final class MainActivity extends Activity {
     }
 
     private void showTab(String name) {
+        if (!name.equals(tab) && isCatalogName(name)) {
+            selectedGroup = ALL;
+            query = "";
+        }
         tab = name;
         main = Ui.column(this);
         main.setBackgroundColor(Ui.BG);
         setContentView(main);
-        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 78)));
+        main.setOnApplyWindowInsetsListener((view, insets) -> {
+            int top;
+            int bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                top = bars.top;
+                bottom = bars.bottom;
+            } else {
+                top = insets.getSystemWindowInsetTop();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(0, top, 0, bottom);
+            return insets;
+        });
+        main.requestApplyInsets();
+        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 72)));
         content = Ui.column(this);
         main.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         switch (name) {
             case "Źródła": showSources(); break;
             case "EPG": showGuide(); break;
-            case "Więcej": showSettings(); break;
+            case "Ustawienia": showSettings(); break;
             default: showChannels(); break;
         }
         main.addView(bottomNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 68)));
@@ -124,24 +153,33 @@ public final class MainActivity extends Activity {
 
     private View brandHeader() {
         LinearLayout bar = Ui.row(this);
-        bar.setPadding(Ui.dp(this, 18), Ui.dp(this, 12), Ui.dp(this, 18), Ui.dp(this, 8));
+        bar.setPadding(Ui.dp(this, 13), Ui.dp(this, 8), Ui.dp(this, 13), Ui.dp(this, 8));
         ImageView icon = new ImageView(this);
         icon.setImageResource(R.drawable.ic_launcher);
         icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        bar.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 47), Ui.dp(this, 47)));
+        bar.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42)));
 
         LinearLayout titles = Ui.column(this);
         titles.setPadding(Ui.dp(this, 10), 0, 0, 0);
-        titles.addView(Ui.text(this, "SS-IPTV", 21, Ui.WHITE, true));
-        TextView slogan = Ui.text(this, "TWOJA TELEWIZJA. TWÓJ WYBÓR.", 9, Ui.ACCENT, true);
+        titles.addView(Ui.text(this, "SS-IPTV", 20, Ui.WHITE, true));
+        TextView slogan = Ui.text(this, "TWOJA TELEWIZJA", 9, Ui.ACCENT, true);
         slogan.setLetterSpacing(0.08f);
         titles.addView(slogan);
         bar.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView source = Ui.text(this, "●  LIVE", 11, Ui.ACCENT, true);
-        source.setPadding(Ui.dp(this, 12), Ui.dp(this, 7), Ui.dp(this, 12), Ui.dp(this, 7));
-        source.setBackground(Ui.rounded(this, Ui.SURFACE, 50));
+        TextView source = Ui.text(this, "＋ Źródło", 12, Ui.BG, true);
+        source.setGravity(Gravity.CENTER);
+        source.setPadding(Ui.dp(this, 11), Ui.dp(this, 10), Ui.dp(this, 11), Ui.dp(this, 10));
+        source.setBackground(Ui.rounded(this, Ui.ACCENT, 11));
+        source.setContentDescription("Dodaj plik M3U lub zaloguj się do IPTV");
+        source.setOnClickListener(v -> showTab("Źródła"));
         bar.addView(source);
+
+        TextView settings = Ui.text(this, "⚙", 23, Ui.WHITE, false);
+        settings.setGravity(Gravity.CENTER);
+        settings.setContentDescription("Ustawienia aplikacji");
+        settings.setOnClickListener(v -> showTab("Ustawienia"));
+        bar.addView(settings, Ui.margins(this, 42, 46, 7, 0, 0, 0));
         return bar;
     }
 
@@ -149,16 +187,16 @@ public final class MainActivity extends Activity {
         LinearLayout bottom = Ui.row(this);
         bottom.setPadding(Ui.dp(this, 9), Ui.dp(this, 4), Ui.dp(this, 9), Ui.dp(this, 5));
         bottom.setBackgroundColor(Ui.SURFACE);
-        String[] names = {"Kanały", "Źródła", "EPG", "Więcej"};
-        String[] icons = {"▣", "⊕", "▤", "⚙"};
+        String[] names = {"Telewizja", "VOD", "Ulubione", "Ostatnie", "Źródła"};
+        String[] icons = {"▣", "▶", "♥", "◷", "＋"};
         for (int i = 0; i < names.length; i++) {
             final String itemName = names[i];
             boolean chosen = itemName.equals(tab);
             LinearLayout item = Ui.column(this);
             item.setGravity(Gravity.CENTER);
-            TextView icon = Ui.text(this, icons[i], 23, chosen ? Ui.ACCENT : Ui.MUTED, false);
+            TextView icon = Ui.text(this, icons[i], 21, chosen ? Ui.ACCENT : Ui.MUTED, false);
             icon.setGravity(Gravity.CENTER);
-            TextView label = Ui.text(this, itemName, 11, chosen ? Ui.ACCENT : Ui.SECONDARY, chosen);
+            TextView label = Ui.text(this, itemName, 10, chosen ? Ui.ACCENT : Ui.SECONDARY, chosen);
             label.setGravity(Gravity.CENTER);
             item.addView(icon);
             item.addView(label);
@@ -168,27 +206,36 @@ public final class MainActivity extends Activity {
         return bottom;
     }
 
+    private boolean isCatalogTab() {
+        return isCatalogName(tab);
+    }
+
+    private static boolean isCatalogName(String name) {
+        return "Telewizja".equals(name) || "VOD".equals(name) ||
+                "Ulubione".equals(name) || "Ostatnie".equals(name);
+    }
+
     private void showChannels() {
         LinearLayout home = Ui.column(this);
         home.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), 0);
         content.addView(home, new LinearLayout.LayoutParams(-1, -1));
-
-        GradientDrawable heroBg = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF16435B, 0xFF10243F, 0xFF211E45});
-        heroBg.setCornerRadius(Ui.dp(this, 22));
-        LinearLayout hero = Ui.column(this);
-        hero.setBackground(heroBg);
-        hero.setPadding(Ui.dp(this, 22), Ui.dp(this, 16), Ui.dp(this, 22), Ui.dp(this, 14));
-        TextView eyebrow = Ui.text(this, "ODKRYWAJ • OGLĄDAJ • WRACAJ", 10, Ui.ACCENT, true);
-        eyebrow.setLetterSpacing(0.12f);
-        hero.addView(eyebrow);
-        TextView slogan = Ui.text(this, "Wszystkie kanały.\nJedno miejsce.", 23, Ui.WHITE, true);
-        slogan.setLineSpacing(0, 0.93f);
-        hero.addView(slogan, Ui.margins(this, -1, -2, 0, 7, 0, 1));
-        TextView heroFoot = Ui.text(this, "Twoje listy M3U, konto IPTV i EPG", 12, Ui.SECONDARY, false);
-        hero.addView(heroFoot);
-        home.addView(hero, Ui.margins(this, -1, -2, 0, 0, 0, 14));
+        LinearLayout top = Ui.row(this);
+        String headline = "Telewizja".equals(tab) ? "Telewizja na żywo" :
+                "VOD".equals(tab) ? "Filmy i VOD" :
+                "Ulubione".equals(tab) ? "Twoje ulubione" : "Ostatnio oglądane";
+        TextView title = Ui.text(this, headline, 22, Ui.WHITE, true);
+        top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView guide = Ui.text(this, "EPG ›", 12, Ui.ACCENT, true);
+        guide.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9));
+        guide.setOnClickListener(v -> showTab("EPG"));
+        top.addView(guide);
+        home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
+        String subline = "Telewizja".equals(tab) ? "Kanały, kategorie i program na żywo" :
+                "VOD".equals(tab) ? "Wznawiaj filmy dokładnie od ostatniej sceny" :
+                "Ulubione".equals(tab) ? "Ulubione kanały i filmy w jednym miejscu" :
+                "Twoja historia odtwarzania";
+        home.addView(Ui.text(this, subline, 12, Ui.SECONDARY, false),
+                Ui.margins(this, -1, -2, 0, 0, 0, 12));
 
         EditText search = input("⌕  Szukaj kanału lub programu", false);
         search.setSingleLine(true);
@@ -208,54 +255,93 @@ public final class MainActivity extends Activity {
         categories.setHorizontalScrollBarEnabled(false);
         chips = Ui.row(this);
         categories.addView(chips);
-        home.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
+        if ("Telewizja".equals(tab) || "VOD".equals(tab))
+            home.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
         updateChips();
 
         LinearLayout heading = Ui.row(this);
-        TextView title = Ui.text(this, "Kanały na żywo", 18, Ui.WHITE, true);
-        heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         sectionCaption = Ui.text(this, "0 kanałów", 12, Ui.ACCENT, true);
-        heading.addView(sectionCaption);
+        heading.addView(sectionCaption, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView list = Ui.text(this, "☰ Lista", 12, tiled ? Ui.SECONDARY : Ui.ACCENT, !tiled);
+        list.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
+        list.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
+        heading.addView(list, Ui.margins(this, -2, -2, 0, 0, 6, 0));
+        TextView tiles = Ui.text(this, "▦ Kafelki", 12, tiled ? Ui.ACCENT : Ui.SECONDARY, tiled);
+        tiles.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
+        tiles.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
+        heading.addView(tiles);
+        list.setOnClickListener(v -> setTiled(false));
+        tiles.setOnClickListener(v -> setTiled(true));
         home.addView(heading, Ui.margins(this, -1, 42, 0, 0, 0, 4));
 
-        FrameLayout listArea = new FrameLayout(this);
-        channelList = new ListView(this);
-        channelList.setDivider(null);
-        channelList.setDividerHeight(Ui.dp(this, 6));
-        channelList.setSelector(android.R.color.transparent);
-        channelList.setCacheColorHint(Ui.BG);
-        channelList.setVerticalScrollBarEnabled(false);
+        resultsFrame = new FrameLayout(this);
+        home.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+        renderCollection();
+    }
+
+    private void setTiled(boolean enabled) {
+        if (tiled == enabled) return;
+        tiled = enabled;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("grid", enabled).apply();
+        showTab(tab);
+    }
+
+    private void renderCollection() {
+        if (resultsFrame == null) return;
+        resultsFrame.removeAllViews();
         adapter = new ChannelAdapter();
-        channelList.setAdapter(adapter);
-        channelList.setOnItemClickListener((parent, view, position, id) -> {
-            Channel channel = adapter.visible.get(position);
-            Intent intent = new Intent(this, PlayerActivity.class);
-            intent.putExtra(PlayerActivity.EXTRA_ID, channel.id);
-            startActivity(intent);
-        });
-        listArea.addView(channelList, new FrameLayout.LayoutParams(-1, -1));
-        TextView empty = Ui.text(this, "Brak kanałów.\nDodaj playlistę M3U lub konto w zakładce Źródła.", 15,
-                Ui.SECONDARY, false);
+        android.widget.AdapterView<?> collection;
+        if (tiled) {
+            GridView grid = new GridView(this);
+            grid.setNumColumns(getResources().getConfiguration().smallestScreenWidthDp >= 600 ? 4 : 2);
+            grid.setHorizontalSpacing(Ui.dp(this, 9));
+            grid.setVerticalSpacing(Ui.dp(this, 9));
+            grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+            grid.setClipToPadding(false);
+            grid.setPadding(0, Ui.dp(this, 3), 0, Ui.dp(this, 4));
+            grid.setAdapter(adapter);
+            collection = grid;
+        } else {
+            ListView list = new ListView(this);
+            list.setDivider(null);
+            list.setDividerHeight(Ui.dp(this, 7));
+            list.setSelector(android.R.color.transparent);
+            list.setCacheColorHint(Ui.BG);
+            list.setVerticalScrollBarEnabled(false);
+            list.setAdapter(adapter);
+            collection = list;
+        }
+        collection.setOnItemClickListener((parent, view, position, id) ->
+                play(adapter.visible.get(position)));
+        resultsFrame.addView((View) collection, new FrameLayout.LayoutParams(-1, -1));
+        LinearLayout empty = Ui.column(this);
         empty.setGravity(Gravity.CENTER);
-        empty.setPadding(Ui.dp(this, 30), Ui.dp(this, 10), Ui.dp(this, 30), Ui.dp(this, 10));
-        listArea.addView(empty, new FrameLayout.LayoutParams(-1, -1));
-        channelList.setEmptyView(empty);
-        home.addView(listArea, new LinearLayout.LayoutParams(-1, 0, 1));
+        empty.setPadding(Ui.dp(this, 26), Ui.dp(this, 18), Ui.dp(this, 26), Ui.dp(this, 18));
+        empty.addView(Ui.text(this, "Tu jeszcze nic nie ma", 18, Ui.WHITE, true));
+        TextView guidance = Ui.text(this,
+                allChannels.isEmpty() ? "Dodaj plik M3U albo zaloguj się do serwera IPTV." :
+                        "Nie znaleziono pozycji w tym widoku.", 13, Ui.SECONDARY, false);
+        empty.addView(guidance, Ui.margins(this, -1, -2, 0, 9, 0, 14));
+        empty.addView(Ui.button(this, "＋  Dodaj źródło M3U / IPTV", true,
+                v -> showTab("Źródła")));
+        resultsFrame.addView(empty, new FrameLayout.LayoutParams(-1, -1));
+        collection.setEmptyView(empty);
         filterChannels();
     }
 
     private void updateChips() {
-        if (chips == null || !"Kanały".equals(tab)) return;
+        if (chips == null || !isCatalogTab()) return;
         chips.removeAllViews();
         Map<String, Integer> groups = new LinkedHashMap<>();
         for (Channel channel : allChannels) {
+            if ("Telewizja".equals(tab) && channel.vod) continue;
+            if ("VOD".equals(tab) && !channel.vod) continue;
             groups.put(channel.group, groups.getOrDefault(channel.group, 0) + 1);
         }
         ArrayList<String> names = new ArrayList<>(groups.keySet());
         Collections.sort(names, String.CASE_INSENSITIVE_ORDER);
         ArrayList<String> filterNames = new ArrayList<>();
         filterNames.add(ALL);
-        filterNames.add(FAVORITES);
         filterNames.addAll(names);
         if (!filterNames.contains(selectedGroup)) selectedGroup = ALL;
         for (String name : filterNames) {
@@ -274,11 +360,14 @@ public final class MainActivity extends Activity {
     }
 
     private void filterChannels() {
-        if (adapter == null || !"Kanały".equals(tab)) return;
+        if (adapter == null || !isCatalogTab()) return;
         ArrayList<Channel> result = new ArrayList<>();
         for (Channel c : allChannels) {
-            if (FAVORITES.equals(selectedGroup) && !c.favorite) continue;
-            if (!ALL.equals(selectedGroup) && !FAVORITES.equals(selectedGroup) &&
+            if ("Telewizja".equals(tab) && c.vod) continue;
+            if ("VOD".equals(tab) && !c.vod) continue;
+            if ("Ulubione".equals(tab) && !c.favorite) continue;
+            if ("Ostatnie".equals(tab) && c.lastWatched == 0) continue;
+            if (!ALL.equals(selectedGroup) &&
                     !c.group.equals(selectedGroup)) continue;
             ChannelDatabase.Guide guide = guides.get(c.id);
             String prog = guide == null || guide.current == null ? "" : guide.current;
@@ -286,9 +375,12 @@ public final class MainActivity extends Activity {
                     !prog.toLowerCase(Locale.ROOT).contains(query)) continue;
             result.add(c);
         }
+        if ("Ostatnie".equals(tab)) {
+            result.sort((left, right) -> Long.compare(right.lastWatched, left.lastWatched));
+        }
         adapter.visible = result;
         adapter.notifyDataSetChanged();
-        if (sectionCaption != null) sectionCaption.setText(result.size() + " kanałów");
+        if (sectionCaption != null) sectionCaption.setText(result.size() + " pozycji");
     }
 
     private ScrollView scrollPage() {
@@ -370,10 +462,10 @@ public final class MainActivity extends Activity {
                 String normalized = XtreamClient.normalizeServer(address);
                 XtreamClient.Credentials credentials = new XtreamClient.Credentials(
                         normalized, username, pass);
-                List<Channel> items = new XtreamClient(credentials).fetchLiveChannels();
+                List<Channel> items = new XtreamClient(credentials).fetchChannels();
                 database.replaceSource(ChannelDatabase.XTREAM, items);
                 secure.saveServer(normalized, username, pass);
-                return "Pobrano " + items.size() + " kanałów z serwera";
+                return "Pobrano " + items.size() + " pozycji TV i VOD";
             }, true);
             if (address.startsWith("http://")) {
                 new AlertDialog.Builder(this)
@@ -389,9 +481,9 @@ public final class MainActivity extends Activity {
                     performTask("Odświeżanie konta…", () -> {
                         XtreamClient.Credentials creds = secure.credentials();
                         if (creds == null) throw new IllegalStateException("Brak zapisanego konta");
-                        List<Channel> items = new XtreamClient(creds).fetchLiveChannels();
+                        List<Channel> items = new XtreamClient(creds).fetchChannels();
                         database.replaceSource(ChannelDatabase.XTREAM, items);
-                        return "Odświeżono " + items.size() + " kanałów";
+                        return "Odświeżono " + items.size() + " pozycji TV i VOD";
                     }, true)));
         }
         page.addView(xtream);
@@ -423,15 +515,14 @@ public final class MainActivity extends Activity {
 
         page.addView(Ui.text(this, "ŹRÓDŁA XMLTV", 11, Ui.MUTED, true));
         for (int i = 0; i < EpgSync.SOURCES.length; i++) {
-            LinearLayout row = Ui.row(this);
+            LinearLayout row = Ui.column(this);
             row.setPadding(Ui.dp(this, 13), Ui.dp(this, 11), Ui.dp(this, 10), Ui.dp(this, 11));
             row.setBackground(Ui.rounded(this, Ui.SURFACE, 13));
-            TextView number = Ui.text(this, String.format(Locale.ROOT, "%02d", i + 1),
-                    14, Ui.ACCENT, true);
-            row.addView(number, Ui.margins(this, 34, -1, 0, 0, 5, 0));
             TextView address = Ui.text(this, EpgSync.SOURCES[i], 11, Ui.SECONDARY, false);
             address.setMaxLines(2);
-            row.addView(address, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(address);
+            row.addView(Ui.text(this, secure.epgSourceStatus(i), 12,
+                    Ui.ACCENT, false), Ui.margins(this, -1, -2, 0, 5, 0, 0));
             page.addView(row, Ui.margins(this, -1, -2, 0, 8, 0, 0));
         }
 
@@ -464,7 +555,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.0.0", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.1.0", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -473,8 +564,26 @@ public final class MainActivity extends Activity {
                 12, Ui.ACCENT, false));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
+        LinearLayout epgCard = card();
+        epgCard.addView(Ui.text(this, "EPG • status źródeł", 19, Ui.WHITE, true));
+        epgCard.addView(Ui.text(this, secure.epgStatus(), 13, Ui.ACCENT, false),
+                Ui.margins(this, -1, -2, 0, 7, 0, 12));
+        for (int i = 0; i < EpgSync.SOURCES.length; i++) {
+            epgCard.addView(Ui.text(this, EpgSync.SOURCES[i], 11, Ui.SECONDARY, false));
+            epgCard.addView(Ui.text(this, secure.epgSourceStatus(i), 12, Ui.WHITE, true),
+                    Ui.margins(this, -1, -2, 0, 2, 0, 9));
+        }
+        epgCard.addView(Ui.button(this, "↻  Odśwież wszystkie źródła EPG", true,
+                v -> performTask("Synchronizowanie EPG…",
+                        () -> EpgSync.refresh(getApplicationContext()), false)));
+        epgCard.addView(Ui.button(this, "Zobacz program telewizyjny  →", false,
+                v -> showTab("EPG")), Ui.margins(this, -1, -2, 0, 9, 0, 0));
+        page.addView(epgCard, Ui.margins(this, -1, -2, 0, 0, 0, 16));
+
         LinearLayout actions = card();
         actions.addView(Ui.text(this, "ZARZĄDZAJ DANYMI", 11, Ui.MUTED, true));
+        actions.addView(Ui.button(this, "＋  Dodaj plik M3U lub konto IPTV", true,
+                v -> showTab("Źródła")), Ui.margins(this, -1, -2, 0, 12, 0, 12));
         actions.addView(Ui.button(this, "Usuń listę M3U z urządzenia", false,
                 v -> confirmDelete("Usunąć lokalną playlistę M3U?", () -> {
                     database.deleteSource(ChannelDatabase.M3U);
@@ -527,8 +636,8 @@ public final class MainActivity extends Activity {
                 if (sourceStatus != null) sourceStatus.setText(message);
                 toast(message);
                 if (ok) {
-                    if (returnHome) showTab("Kanały");
-                    else if ("EPG".equals(tab)) showTab("EPG");
+                    if (returnHome) showTab("Telewizja");
+                    else if ("EPG".equals(tab) || "Ustawienia".equals(tab)) showTab(tab);
                     reloadData();
                     if (returnHome) {
                         Thread epg = new Thread(() -> EpgSync.refresh(getApplicationContext()),
@@ -560,7 +669,7 @@ public final class MainActivity extends Activity {
                         operation.run();
                         runOnUiThread(() -> {
                             toast("Usunięto wybrane dane");
-                            showTab("Kanały");
+                            showTab("Telewizja");
                             reloadData();
                         });
                     });
@@ -579,6 +688,39 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private FrameLayout logo(Channel channel, int size) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackground(Ui.rounded(this, Ui.CARD, 13));
+        TextView fallback = Ui.text(this, channel.name.substring(0,
+                Math.min(2, channel.name.length())).toUpperCase(Locale.ROOT), 15, Ui.ACCENT, true);
+        fallback.setGravity(Gravity.CENTER);
+        frame.addView(fallback, new FrameLayout.LayoutParams(-1, -1));
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setPadding(Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5));
+        frame.addView(image, new FrameLayout.LayoutParams(-1, -1));
+        LogoLoader.load(image, channel.logo);
+        return frame;
+    }
+
+    private void toggleFavorite(Channel channel) {
+        channel.favorite = !channel.favorite;
+        boolean saved = channel.favorite;
+        io.execute(() -> database.setFavorite(channel.id, saved));
+        filterChannels();
+    }
+
+    private String channelDescription(Channel channel, ChannelDatabase.Guide guide) {
+        if (channel.vod) {
+            if (channel.playbackMs > 0)
+                return "▶ Kontynuuj od " + (channel.playbackMs / 60000) + " min";
+            return "Film VOD • " + channel.group;
+        }
+        if (guide != null && guide.current != null && !guide.current.isEmpty())
+            return "● Teraz: " + guide.current;
+        return channel.group + "  •  EPG w przygotowaniu";
+    }
+
     private final class ChannelAdapter extends BaseAdapter {
         List<Channel> visible = new ArrayList<>();
         @Override public int getCount() { return visible.size(); }
@@ -589,18 +731,17 @@ public final class MainActivity extends Activity {
         @Override public View getView(int position, View recycled, ViewGroup parent) {
             Channel channel = visible.get(position);
             ChannelDatabase.Guide guide = guides.get(channel.id);
+            if (tiled) return makeTile(channel, guide);
+            return makeRow(channel, guide);
+        }
+
+        private View makeRow(Channel channel, ChannelDatabase.Guide guide) {
             LinearLayout row = Ui.row(MainActivity.this);
             row.setPadding(Ui.dp(MainActivity.this, 12), Ui.dp(MainActivity.this, 11),
                     Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 11));
             row.setBackground(Ui.rounded(MainActivity.this, Ui.SURFACE, 15));
-
-            TextView channelIcon = Ui.text(MainActivity.this,
-                    channel.name.substring(0, Math.min(2, channel.name.length())).toUpperCase(Locale.ROOT),
-                    15, Ui.ACCENT, true);
-            channelIcon.setGravity(Gravity.CENTER);
-            channelIcon.setBackground(Ui.rounded(MainActivity.this, Ui.CARD, 13));
-            row.addView(channelIcon, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 48),
-                    Ui.dp(MainActivity.this, 48)));
+            row.addView(logo(channel, 56), new LinearLayout.LayoutParams(
+                    Ui.dp(MainActivity.this, 56), Ui.dp(MainActivity.this, 56)));
 
             LinearLayout labels = Ui.column(MainActivity.this);
             labels.setPadding(Ui.dp(MainActivity.this, 12), 0, Ui.dp(MainActivity.this, 5), 0);
@@ -608,31 +749,58 @@ public final class MainActivity extends Activity {
             name.setSingleLine(true);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             labels.addView(name);
-            String category = channel.group;
-            TextView group = Ui.text(MainActivity.this, category, 11, Ui.MUTED, false);
+            TextView group = Ui.text(MainActivity.this, channel.group, 11, Ui.MUTED, false);
             group.setSingleLine(true);
             labels.addView(group);
-            if (guide != null && guide.current != null && !guide.current.isEmpty()) {
-                TextView now = Ui.text(MainActivity.this, "●  " + guide.current, 11, Ui.ACCENT, false);
-                now.setSingleLine(true);
-                now.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                labels.addView(now);
-            }
+            TextView now = Ui.text(MainActivity.this, channelDescription(channel, guide), 11,
+                    Ui.ACCENT, false);
+            now.setSingleLine(true);
+            now.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            labels.addView(now);
             row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
 
-            TextView favorite = Ui.text(MainActivity.this, channel.favorite ? "★" : "☆",
-                    24, channel.favorite ? 0xFFFFBE69 : Ui.MUTED, false);
+            TextView favorite = Ui.text(MainActivity.this, channel.favorite ? "♥" : "♡",
+                    25, channel.favorite ? 0xFFFF728D : Ui.MUTED, false);
             favorite.setGravity(Gravity.CENTER);
             favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-            favorite.setOnClickListener(v -> {
-                channel.favorite = !channel.favorite;
-                boolean flag = channel.favorite;
-                io.execute(() -> database.setFavorite(channel.id, flag));
-                filterChannels();
-            });
+            favorite.setOnClickListener(v -> toggleFavorite(channel));
             row.addView(favorite, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 38),
                     Ui.dp(MainActivity.this, 50)));
             return row;
+        }
+
+        private View makeTile(Channel channel, ChannelDatabase.Guide guide) {
+            LinearLayout tile = Ui.column(MainActivity.this);
+            tile.setPadding(Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 10),
+                    Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 13));
+            tile.setBackground(Ui.rounded(MainActivity.this, Ui.SURFACE, 17));
+
+            FrameLayout art = new FrameLayout(MainActivity.this);
+            FrameLayout symbol = logo(channel, 100);
+            FrameLayout.LayoutParams center = new FrameLayout.LayoutParams(
+                    Ui.dp(MainActivity.this, 94), Ui.dp(MainActivity.this, 94), Gravity.CENTER);
+            art.addView(symbol, center);
+            TextView heart = Ui.text(MainActivity.this, channel.favorite ? "♥" : "♡", 25,
+                    channel.favorite ? 0xFFFF728D : Ui.WHITE, false);
+            heart.setGravity(Gravity.CENTER);
+            heart.setBackground(Ui.rounded(MainActivity.this, 0xD4142C42, 50));
+            heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
+            heart.setOnClickListener(v -> toggleFavorite(channel));
+            FrameLayout.LayoutParams heartParams = new FrameLayout.LayoutParams(
+                    Ui.dp(MainActivity.this, 35), Ui.dp(MainActivity.this, 35), Gravity.RIGHT | Gravity.TOP);
+            art.addView(heart, heartParams);
+            tile.addView(art, new LinearLayout.LayoutParams(-1, Ui.dp(MainActivity.this, 102)));
+
+            TextView name = Ui.text(MainActivity.this, channel.name, 14, Ui.WHITE, true);
+            name.setSingleLine(true);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tile.addView(name, Ui.margins(MainActivity.this, -1, -2, 0, 7, 0, 2));
+            TextView desc = Ui.text(MainActivity.this, channelDescription(channel, guide),
+                    11, Ui.ACCENT, false);
+            desc.setMaxLines(2);
+            desc.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tile.addView(desc);
+            return tile;
         }
     }
 }

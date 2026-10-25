@@ -40,4 +40,17 @@ public final class M3uParserTest {
         assertEquals("Filmy", items.get(0).group);
         assertEquals("Inne", items.get(1).group);
     }
+
+    @Test public void detectsVideoOnDemandWithoutMisclassifyingLive() throws Exception {
+        String fixture = "#EXTM3U\n" +
+                "#EXTINF:-1 group-title=\"VOD Filmy\",Film 2026\n" +
+                "https://example.org/movie/9.mp4\n" +
+                "#EXTINF:-1 group-title=\"Polska\",Kanał Live\n" +
+                "https://example.org/live/1.m3u8\n";
+        List<Channel> items = M3uParser.parse(new ByteArrayInputStream(
+                fixture.getBytes(StandardCharsets.UTF_8)));
+        assertEquals(2, items.size());
+        assertTrue(items.get(0).vod);
+        assertFalse(items.get(1).vod);
+    }
 }

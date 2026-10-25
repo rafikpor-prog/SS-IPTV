@@ -65,7 +65,7 @@ public final class XtreamClient {
                 (action.isEmpty() ? "" : "&action=" + encode(action));
     }
 
-    public List<Channel> fetchLiveChannels() throws Exception {
+    public List<Channel> fetchChannels() throws Exception {
         JSONObject auth = new JSONObject(request(api("")));
         JSONObject user = auth.optJSONObject("user_info");
         if (user == null || user.optInt("auth") != 1 ||
@@ -97,13 +97,47 @@ public final class XtreamClient {
                     stream.optString("epg_channel_id", ""),
                     stream.optString("stream_icon", ""), internal, ChannelDatabase.XTREAM));
         }
-        if (result.isEmpty()) throw new IOException("Serwer nie zwrócił kanałów na żywo.");
+        // Starsze instalacje Xtream nie zawsze udostępniają sekcję VOD.
+        // Wówczas nadal pokazujemy działające kanały Live.
+        try {
+            Map<String, String> vodCategories = new HashMap<>();
+            JSONArray vodCats = new JSONArray(request(api("get_vod_categories")));
+            for (int i = 0; i < vodCats.length(); i++) {
+                JSONObject category = vodCats.optJSONObject(i);
+                if (category != null) vodCategories.put(
+                        category.optString("category_id"), category.optString("category_name", "Filmy"));
+            }
+            JSONArray movies = new JSONArray(request(api("get_vod_streams")));
+            for (int i = 0; i < movies.length(); i++) {
+                JSONObject movie = movies.optJSONObject(i);
+                if (movie == null) continue;
+                String id = movie.optString("stream_id", "");
+                if (id.isEmpty()) continue;
+                String extension = movie.optString("container_extension", "mp4");
+                if (!extension.matches("[a-zA-Z0-9]{1,5}")) extension = "mp4";
+                String internal = "xtream://movie/" + id + "." + extension;
+                result.add(new Channel(movie.optString("name", "Film " + id),
+                        vodCategories.getOrDefault(movie.optString("category_id"), "Filmy"),
+                        "", movie.optString("stream_icon", ""), internal,
+                        ChannelDatabase.XTREAM).asVod());
+            }
+        } catch (Exception optionalVodError) {
+            if (result.isEmpty()) throw new IOException("Serwer nie zwrócił kanałów ani filmów VOD.");
+        }
+        if (result.isEmpty()) throw new IOException("Serwer nie zwrócił kanałów ani filmów VOD.");
         return result;
     }
 
+    /** Zachowujemy zgodność ze starszym kodem wywołującym API. */
+    public List<Channel> fetchLiveChannels() throws Exception {
+        return fetchChannels();
+    }
+
     public static String streamUrl(Credentials creds, String internalUrl) {
-        String stream = internalUrl.substring("xtream://live/".length());
-        return creds.server + "/live/" + encode(creds.username) + "/" +
+        boolean vod = internalUrl.startsWith("xtream://movie/");
+        String stream = internalUrl.substring(vod ? "xtream://movie/".length()
+                : "xtream://live/".length());
+        return creds.server + (vod ? "/movie/" : "/live/") + encode(creds.username) + "/" +
                 encode(creds.password) + "/" + stream;
     }
 

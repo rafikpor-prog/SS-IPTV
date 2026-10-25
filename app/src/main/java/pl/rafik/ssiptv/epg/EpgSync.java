@@ -81,6 +81,7 @@ public final class EpgSync {
         if (channels.isEmpty()) return "Dodaj kanały, aby dopasować program EPG";
         Map<String, List<Long>> keys = new HashMap<>();
         for (Channel c : channels) {
+            if (c.vod) continue;
             addKey(keys, c.tvgId, c.id);
             addKey(keys, c.name, c.id);
         }
@@ -91,11 +92,18 @@ public final class EpgSync {
         long now = System.currentTimeMillis();
         for (int i = 0; i < SOURCES.length; i++) {
             if (Thread.currentThread().isInterrupted()) break;
+            settings.saveEpgSourceStatus(i, "Trwa odczyt…");
             try {
                 readXmltv(SOURCES[i], keys, guides, now, i);
                 sourcesOk++;
+                settings.saveEpgSourceStatus(i, "✓ Odczytane • " +
+                        new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+                                .format(new Date(System.currentTimeMillis())));
             } catch (Exception e) {
                 failures.add("Źródło " + (i + 1) + ": " + e.getClass().getSimpleName());
+                String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                if (reason.length() > 70) reason = reason.substring(0, 70);
+                settings.saveEpgSourceStatus(i, "✕ Błąd: " + reason);
             }
         }
         if (sourcesOk > 0) {

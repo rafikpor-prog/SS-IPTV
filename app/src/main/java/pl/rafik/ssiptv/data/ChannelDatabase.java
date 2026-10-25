@@ -27,7 +27,7 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     }
 
     public ChannelDatabase(Context context) {
-        super(context, "ss_iptv.db", null, 1);
+        super(context, "ss_iptv.db", null, 2);
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -35,7 +35,9 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 "_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "name TEXT NOT NULL, group_name TEXT NOT NULL, tvg_id TEXT, " +
                 "logo TEXT, stream_url TEXT NOT NULL, source TEXT NOT NULL, " +
-                "favorite INTEGER NOT NULL DEFAULT 0)");
+                "favorite INTEGER NOT NULL DEFAULT 0, " +
+                "is_vod INTEGER NOT NULL DEFAULT 0, last_watched INTEGER NOT NULL DEFAULT 0, " +
+                "playback_ms INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE INDEX channel_group_index ON channels(group_name)");
         db.execSQL("CREATE INDEX channel_source_index ON channels(source)");
         db.execSQL("CREATE TABLE epg (channel_id INTEGER PRIMARY KEY, " +
@@ -43,15 +45,23 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        // Pierwsza wersja schematu; przyszłe migracje należy dodawać tutaj.
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE channels ADD COLUMN is_vod INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE channels ADD COLUMN last_watched INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE channels ADD COLUMN playback_ms INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE channels ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0");
+        }
     }
 
     public synchronized int replaceSource(String source, List<Channel> channels) {
         SQLiteDatabase db = getWritableDatabase();
-        Set<String> favorites = new HashSet<>();
-        try (Cursor c = db.query("channels", new String[]{"stream_url"}, "source=? AND favorite=1",
+        Map<String, long[]> previous = new HashMap<>();
+        try (Cursor c = db.query("channels",
+                new String[]{"stream_url", "favorite", "last_watched", "playback_ms", "duration_ms"},
+                "source=?",
                 new String[]{source}, null, null, null)) {
-            while (c.moveToNext()) favorites.add(c.getString(0));
+            while (c.moveToNext()) previous.put(c.getString(0),
+                    new long[]{c.getInt(1), c.getLong(2), c.getLong(3), c.getLong(4)});
         }
         db.beginTransaction();
         try {
@@ -65,7 +75,12 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                 values.put("logo", item.logo);
                 values.put("stream_url", item.url);
                 values.put("source", source);
-                values.put("favorite", favorites.contains(item.url) ? 1 : 0);
+                long[] state = previous.get(item.url);
+                values.put("favorite", state == null ? 0 : state[0]);
+                values.put("is_vod", item.vod ? 1 : 0);
+                values.put("last_watched", state == null ? 0 : state[1]);
+                values.put("playback_ms", state == null ? 0 : state[2]);
+                values.put("duration_ms", state == null ? 0 : state[3]);
                 db.insertOrThrow("channels", null, values);
             }
             db.setTransactionSuccessful();
@@ -100,6 +115,10 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
                         c.getString(c.getColumnIndexOrThrow("source")));
                 item.id = c.getLong(c.getColumnIndexOrThrow("_id"));
                 item.favorite = c.getInt(c.getColumnIndexOrThrow("favorite")) == 1;
+                item.vod = c.getInt(c.getColumnIndexOrThrow("is_vod")) == 1;
+                item.lastWatched = c.getLong(c.getColumnIndexOrThrow("last_watched"));
+                item.playbackMs = c.getLong(c.getColumnIndexOrThrow("playback_ms"));
+                item.durationMs = c.getLong(c.getColumnIndexOrThrow("duration_ms"));
                 items.add(item);
             }
         }
@@ -109,6 +128,19 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
     public synchronized void setFavorite(long id, boolean favorite) {
         ContentValues values = new ContentValues();
         values.put("favorite", favorite ? 1 : 0);
+        getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
+    }
+
+    public synchronized void markWatched(long id) {
+        ContentValues values = new ContentValues();
+        values.put("last_watched", System.currentTimeMillis());
+        getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
+    }
+
+    public synchronized void savePlayback(long id, long position, long duration) {
+        ContentValues values = new ContentValues();
+        values.put("playback_ms", Math.max(0, position));
+        values.put("duration_ms", Math.max(0, duration));
         getWritableDatabase().update("channels", values, "_id=?", new String[]{Long.toString(id)});
     }
 

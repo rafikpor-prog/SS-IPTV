@@ -94,4 +94,12 @@ public final class SecureSettings {
         if (timestamp > 0) editor.putLong("epg_last_sync", timestamp);
         editor.apply();
     }
+
+    public void saveEpgSourceStatus(int index, String status) {
+        prefs.edit().putString("epg_source_" + index, status).apply();
+    }
+
+    public String epgSourceStatus(int index) {
+        return prefs.getString("epg_source_" + index, "Jeszcze nie sprawdzano");
+    }
 }

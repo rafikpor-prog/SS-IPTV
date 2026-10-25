@@ -2,7 +2,7 @@
 
 Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. Projekt powstał od zera; nie zawiera kanałów, playlist ani dostępu do żadnego operatora.
 
-## Funkcje 1.0.0
+## Funkcje 1.1.0
 
 - Import pliku Extended M3U przez systemowy wybór pliku albo pobranie playlisty z URL.
 - Fizyczny zapis ostatniej playlisty w prywatnym katalogu aplikacji jako plik playlist.m3u oraz zapis kanałów w SQLite.
@@ -13,6 +13,13 @@ Niezależna, natywna aplikacja Android do odtwarzania własnych źródeł IPTV. 
 - Automatyczne EPG XMLTV przy uruchomieniu i po imporcie kanałów; w tle cyklicznie co 12 godzin na sieci nielimitowanej/Wi-Fi (JobScheduler), ręczne odświeżanie i lokalny cache.
 - Cztery źródła EPG: epg.ovh/pltv.xml, epg.polishteam.one/guide.xml, epg.ovh/pl.xml, epg.ovh/plar.xml.
 - Polski interfejs w ciemnym stylu, własna ikona, podgląd aktualnego programu na kanałach.
+- Widoczne u góry przyciski **+ Źródło** i **Ustawienia** oraz prawidłowy margines pod paskami systemowymi Androida.
+- Szybki dostęp do **Telewizja / VOD / Ulubione / Ostatnie / Źródła** na dolnym pasku.
+- Kanały i filmy jako **lista albo kafelki**, z automatycznie pobieranymi logotypami, kategorią i opisem programu.
+- Serwery Xtream: Live oraz filmy VOD z kategorii get_vod_categories i get_vod_streams. Obsługa prostego VOD z M3U.
+- Wznawianie filmu VOD od zapamiętanej pozycji oraz historia ostatnio odtwarzanych pozycji.
+- OSD po rozpoczęciu odtwarzania: nazwa, logotyp, aktualny/następny program, serduszko i znaczek jakości obrazu SD / HD / FULL HD / 4K ustalany z rozdzielczości odtwarzanego wideo.
+- W ustawieniach bieżący wynik odczytu każdego z czterech źródeł EPG oraz ręczne odświeżanie.
 
 ## Budowanie
 
@@ -24,7 +31,7 @@ Plik: app/build/outputs/apk/debug/app-debug.apk.
 
 ## Wydania z tym samym certyfikatem
 
-Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Klucz, którym podpisano pierwszą wersję, musi zostać zachowany do kolejnych aktualizacji pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej aktualizacji, nie zmieniaj applicationId.
+Prywatny plik JKS i hasła przechowuj **poza publicznym repozytorium**. Wersja 1.1.0 ma versionCode 2 i jest podpisywana tym samym kluczem co 1.0.0, aby można ją było instalować jako aktualizację pakietu pl.rafik.ssiptv. Zmień versionCode przy każdej kolejnej aktualizacji, nie zmieniaj applicationId.
 
     ./gradlew :app:assembleRelease \
       -PsigningStoreFile=/bezpieczna/sciezka/ss-iptv-release.jks \
@@ -38,7 +45,8 @@ Uwaga: parametry wiersza poleceń mogą być widoczne w historii terminala; w au
 
 - Aplikacja używa tylko źródeł podanych przez użytkownika. Nie omija DRM ani zabezpieczeń dostępu.
 - Serwery HTTP i strumienie HTTP są obsługiwane dla zgodności z IPTV, lecz loginy przesyłane HTTP **nie są chronione szyfrowaniem**. Zalecane jest HTTPS.
-- EPG jest zależne od dostępności zewnętrznych serwerów i jakości identyfikatorów tvg-id. W pierwszej wersji przechowywany jest bieżący i następny program, bez pełnej siatki 7-dniowej.
+- EPG jest zależne od dostępności zewnętrznych serwerów i jakości identyfikatorów tvg-id. Przechowywany jest bieżący i następny program, bez pełnej siatki 7-dniowej.
+- Obecne VOD Xtream obejmuje filmy; odtwarzanie seriali z odcinkami oraz katalogi DRM wymagają osobnej implementacji.
 - Odtwarzanie może zależeć od kodeków urządzenia i sposobu dostarczania streamu przez operatora.
 - Brak synchronizacji pomiędzy urządzeniami: listy i ulubione pozostają wyłącznie lokalnie.
 - Nie testowano wszystkich serwerów Xtream. Niektóre niestandardowe odmiany API mogą wymagać dostosowania.

@@ -47,7 +47,14 @@ public final class M3uParser {
                     if (line.startsWith("http://") || line.startsWith("https://") ||
                             line.startsWith("rtsp://") || line.startsWith("udp://")) {
                         String display = name.isEmpty() ? "Kanał " + (result.size() + 1) : name;
-                        result.add(new Channel(display, group, id, logo, line, "M3U"));
+                        Channel channel = new Channel(display, group, id, logo, line, "M3U");
+                        String category = group.toLowerCase(java.util.Locale.ROOT);
+                        String streamPath = line.toLowerCase(java.util.Locale.ROOT).split("\\?", 2)[0];
+                        if (category.contains("vod") || category.contains("film") ||
+                                category.contains("movie") || category.contains("kino") ||
+                                streamPath.endsWith(".mp4") || streamPath.endsWith(".mkv") ||
+                                streamPath.endsWith(".avi")) channel.asVod();
+                        result.add(channel);
                         if (result.size() >= MAX_CHANNELS) {
                             throw new IOException("Lista przekracza limit " + MAX_CHANNELS + " kanałów.");
                         }

@@ -123,7 +123,7 @@ public final class EpgSync {
             } catch (Exception e) {
                 String reason = connectionError(e);
                 if (reason.length() > 70) reason = reason.substring(0, 70);
-                settings.saveEpgSourceStatus(i, "Niedostępne: " + reason + " · dane lokalne zachowane");
+                settings.saveEpgSourceStatus(i, "Niedostępne: " + reason + " · cache bez zmian");
             }
         }
         if (sourceOk >= 0) {
@@ -132,8 +132,9 @@ public final class EpgSync {
             settings.saveEpgStatus(System.currentTimeMillis(), status);
             return status;
         }
-        String status = "Źródła EPG niedostępne — używam zapisanych danych. " +
-                "Kolejna próba za 6 godzin";
+        String status = db.readGuides().isEmpty() ?
+                "Źródła EPG niedostępne — brak danych lokalnych. Próba za 6 godzin" :
+                "Źródła EPG niedostępne — program z lokalnej bazy. Próba za 6 godzin";
         settings.saveEpgStatus(0, status);
         return status;
     }

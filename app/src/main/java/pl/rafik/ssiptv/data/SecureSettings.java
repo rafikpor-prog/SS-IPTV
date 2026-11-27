@@ -102,6 +102,16 @@ public final class SecureSettings {
         prefs.edit().putString("playback_engine", engine).apply();
     }
 
+    public int bufferMode() {
+        int value = prefs.getInt("buffer_mode", 0);
+        return value >= 0 && value <= 2 ? value : 0;
+    }
+
+    public void setBufferMode(int value) {
+        if (value < 0 || value > 2) throw new IllegalArgumentException("Invalid buffer mode");
+        prefs.edit().putInt("buffer_mode", value).apply();
+    }
+
     public String customEpgUrl() {
         return prefs.getString("custom_epg_url", "");
     }

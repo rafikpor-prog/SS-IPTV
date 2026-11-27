@@ -1195,6 +1195,12 @@ public final class MainActivity extends Activity {
                         showTab("Ustawienia");
                     }), Ui.margins(this, -1, -2, 0, 0, 0, 6));
         }
+        String[] buffers = {"Zrównoważony", "Stabilny", "Niskie opóźnienie"};
+        playerCard.addView(Ui.button(this, "Bufor: " + buffers[secure.bufferMode()], false, v -> {
+            secure.setBufferMode((secure.bufferMode() + 1) % buffers.length);
+            showTab("Ustawienia");
+        }), Ui.margins(this, -1, -2, 0, 8, 0, 6));
+        playerCard.addView(Ui.text(this, "Media3 / VLC: zmiana od następnego otwarcia materiału. Tryb stabilny zwiększa bufor; małe urządzenia mają mniejszy limit docelowy.", 12, Ui.SECONDARY, false));
         playerCard.addView(Ui.button(this,
                 secure.fillSdScreen() ? "SD: wypełnianie ekranu włączone" :
                         "SD: oryginalne proporcje obrazu", false, v -> {

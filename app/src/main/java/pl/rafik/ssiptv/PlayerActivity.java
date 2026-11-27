@@ -84,6 +84,8 @@ import pl.rafik.ssiptv.ui.Ui;
  * Odtwarzacz TV/VOD z OSD, ulubionymi, rzeczywistą jakością z VideoSize
  * i zapamiętywaniem postępu VOD w prywatnej bazie urządzenia.
  */
+// Explicitly opt in to Media3 1.8.1 APIs used by this playback activity.
+@androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
 public final class PlayerActivity extends Activity {
     public static final String EXTRA_ID = "channel_id";
     public static final String EXTRA_EXTERNAL_URI = "external_video_uri";
@@ -115,6 +117,9 @@ public final class PlayerActivity extends Activity {
     private boolean hasVlcVideoOutput;
     private int engineSwaps;
     private int startupRetries;
+    private int bufferMode;
+    private int exoBufferMode = -1;
+    private boolean exoBufferVod;
     private boolean retryScheduled;
     private String selectedEngine = "android";
     private String activeEngine = "android";
@@ -285,10 +290,7 @@ public final class PlayerActivity extends Activity {
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         playerView.setFocusable(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
-        playerView.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP) showOsd();
-            return false;
-        });
+        playerView.setOnClickListener(v -> showOsd());
         root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
         vlcView = new VLCVideoLayout(this);
         vlcView.setVisibility(View.GONE);
@@ -372,7 +374,9 @@ public final class PlayerActivity extends Activity {
         }
         String path = stream.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
         adaptiveStream = path.endsWith(".m3u8") || path.endsWith(".mpd");
-        selectedEngine = new SecureSettings(this).playbackEngine();
+        SecureSettings selected = new SecureSettings(this);
+        bufferMode = selected.bufferMode();
+        selectedEngine = selected.playbackEngine();
         activeEngine = selectedEngine;
         startSelectedEngine(stream);
     }
@@ -622,8 +626,8 @@ public final class PlayerActivity extends Activity {
         try {
             if (libVlc == null) {
                 ArrayList<String> options = new ArrayList<>();
-                options.add("--network-caching=" + (channel.vod ? 4500 : 1800));
-                options.add("--live-caching=1800");
+                options.add("--network-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, channel.vod));
+                options.add("--live-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, false));
                 options.add("--file-caching=" + (channel.vod ? 3500 : 1200));
                 libVlc = new LibVLC(getApplicationContext(), options);
                 libVlc.setUserAgent("SS-IPTV/1.7 (Android TV)", "SS-IPTV/1.7");
@@ -644,8 +648,8 @@ public final class PlayerActivity extends Activity {
             Media media = new Media(libVlc, Uri.parse(spec.url));
             media.setHWDecoderEnabled(true, false);
             // Krótki bufor ogranicza RAM i opóźnienia przy zappingu na Android Box.
-            media.addOption(":network-caching=" + (channel.vod ? 4500 : 1800));
-            media.addOption(":live-caching=1800");
+            media.addOption(":network-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, channel.vod));
+            media.addOption(":live-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, false));
             media.addOption(":http-reconnect=true");
             for (Map.Entry<String, String> entry : spec.headers.entrySet()) {
                 if (entry.getKey().equalsIgnoreCase("User-Agent"))
@@ -758,17 +762,19 @@ public final class PlayerActivity extends Activity {
             httpFactory.setDefaultRequestProperties(spec.headers);
             // Zamiast niszczyć sprzętowy dekoder przy każdym CH+/CH- wykorzystujemy
             // ten sam ExoPlayer. Ograniczamy bufor TV do 16 MiB.
+            if (player != null && (exoBufferMode != bufferMode || exoBufferVod != channel.vod))
+                releaseExo();
             ExoPlayer exo = player;
             if (exo == null) {
                 ActivityManager memory = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
                 boolean smallBox = memory != null && memory.getMemoryClass() <= 128;
-                int maxBufferBytes = (channel.vod ? (smallBox ? 12 : 24) :
-                        (smallBox ? 8 : 16)) * 1024 * 1024;
+                PlaybackBufferPolicy.Plan plan = PlaybackBufferPolicy.plan(bufferMode, channel.vod, smallBox);
                 DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                        .setBufferDurationsMs(channel.vod ? 6000 : 2500,
-                                channel.vod ? 25000 : 12000, 600, 1500)
-                        .setTargetBufferBytes(maxBufferBytes)
+                        .setBufferDurationsMs(plan.minMs, plan.maxMs, plan.startMs, plan.rebufferMs)
+                        .setTargetBufferBytes(plan.targetMiB * 1024 * 1024)
                         .build();
+                exoBufferMode = bufferMode;
+                exoBufferVod = channel.vod;
                 DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
                         .setEnableDecoderFallback(true);
                 exo = new ExoPlayer.Builder(this)
@@ -937,7 +943,7 @@ public final class PlayerActivity extends Activity {
                     player.getTotalBufferedDuration() > 12000 && lowBufferSamples == 0) {
                 qualityCap = Integer.MAX_VALUE;
                 applyQualityCap();
-                setPlaybackStatus("Media3 · Automatyczna najwyższa jakość");
+                setPlaybackStatus("Media3 · Przywrócono automatyczny dobór jakości");
             }
         }
         boolean paused = userPaused || leftScreen || channel.vod && !usingPlatform && !usingVlc &&

@@ -1386,7 +1386,7 @@ public final class MainActivity extends Activity {
     }
 
     private void openContent(Channel channel) {
-        if (channel == null || channel.id <= 0) { toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
+        if (channel == null || !pl.rafik.ssiptv.data.CatalogActivation.canOpen(channel.id, channel.isSeries(), channel.seriesId, channel.source)) { toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
         long now = android.os.SystemClock.elapsedRealtime();
         if (now - lastOpenAt < 400L) return;
         lastOpenAt = now;

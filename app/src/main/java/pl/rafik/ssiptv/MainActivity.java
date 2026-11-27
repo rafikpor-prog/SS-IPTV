@@ -320,7 +320,7 @@ public final class MainActivity extends Activity {
             return insets;
         });
         main.requestApplyInsets();
-        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
+        if (!compactRegularTv()) main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
         main.addView(primaryNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         content = Ui.column(this);
         main.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -746,7 +746,12 @@ public final class MainActivity extends Activity {
 
     private boolean isTiled() { return isMediaTab() ? mediaGrid : tiled; }
 
+    private boolean compactRegularTv() {
+        return !tvMode && "Telewizja".equals(tab) && getResources().getConfiguration().screenHeightDp < 500;
+    }
+
     private void showChannels() {
+        boolean compact = compactRegularTv();
         LinearLayout home = Ui.column(this);
         home.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), 0);
         content.addView(home, new LinearLayout.LayoutParams(-1, -1));
@@ -761,14 +766,15 @@ public final class MainActivity extends Activity {
         guide.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9));
         guide.setOnClickListener(v -> showTab("EPG"));
         top.addView(guide);
-        home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
+        if (!compact) home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
         String subline = "Telewizja".equals(tab) ? "Kanały · kliknij nazwę lub OK · natywne sterowanie A4.1" :
                 "VOD".equals(tab) ? "Okładki, opisy i kontynuowanie oglądania" :
                 "Seriale".equals(tab) ? "Sezony, odcinki i zapis postępu każdego odcinka" :
                 "Ulubione".equals(tab) ? "Ulubione kanały i filmy w jednym miejscu" :
                 "Twoja historia odtwarzania";
-        home.addView(Ui.text(this, subline, 12, Ui.SECONDARY, false),
+        if (!compact) home.addView(Ui.text(this, subline, 12, Ui.SECONDARY, false),
                 Ui.margins(this, -1, -2, 0, 0, 0, 12));
+        LinearLayout filtersPanel = Ui.column(this);
 
         EditText search = input("⌕  Szukaj kanału lub programu", false);
         search.setSingleLine(true);
@@ -782,15 +788,17 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable e) {}
         });
         if (!query.isEmpty()) search.setText(query);
-        home.addView(search, Ui.margins(this, -1, 48, 0, 0, 0, 11));
+        filtersPanel.addView(search, Ui.margins(this, -1, 48, 0, 0, 0, 11));
 
         HorizontalScrollView categories = new HorizontalScrollView(this);
         categories.setHorizontalScrollBarEnabled(false);
         chips = Ui.row(this);
         categories.addView(chips);
         if ("Telewizja".equals(tab) || "VOD".equals(tab) || "Seriale".equals(tab))
-            home.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
+            filtersPanel.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
         updateChips();
+        filtersPanel.setVisibility(compact ? View.GONE : View.VISIBLE);
+        home.addView(filtersPanel, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout heading = Ui.row(this);
         sectionCaption = Ui.text(this, "0 kanałów", 12, Ui.ACCENT, true);
@@ -805,9 +813,17 @@ public final class MainActivity extends Activity {
         heading.addView(tiles);
         list.setOnClickListener(v -> setTiled(false));
         tiles.setOnClickListener(v -> setTiled(true));
+        if (compact) {
+            TextView filters = Ui.button(this, "Filtry", false, v -> {
+                boolean show = filtersPanel.getVisibility() != View.VISIBLE;
+                filtersPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+                if (!show) { search.clearFocus(); android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE); if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(),0); }
+            });
+            heading.addView(filters, Ui.margins(this, -2, 42, 6, 0, 0, 0));
+        }
         home.addView(heading, Ui.margins(this, -1, 42, 0, 0, 0, 4));
 
-        addActivationBar(home);
+        if (!compact) addActivationBar(home);
         resultsFrame = new FrameLayout(this);
         home.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();

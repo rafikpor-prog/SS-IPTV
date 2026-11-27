@@ -16,9 +16,34 @@ jobs:
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Restore persistent debug signing key (if configured)
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.SSIPTV_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p "$HOME/.android"
+            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            chmod 600 "$HOME/.android/debug.keystore"
+          else
+            echo '::warning::No persistent debug key configured; APK update compatibility is not guaranteed.'
+          fi
       - name: Build testable debug APK
         run: sh ./gradlew :app:assembleDebug
+      - name: Unit tests
+        run: sh ./gradlew :app:testDebugUnitTest
+      - name: Lint
+        if: always()
+        run: sh ./gradlew :app:lintDebug
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SS-IPTV-test-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: SS-IPTV-debug
           path: app/build/outputs/apk/debug/app-debug.apk

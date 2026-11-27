@@ -11,8 +11,8 @@ android {
         applicationId 'pl.rafik.ssiptv'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '1.9.1'
+        versionCode 14
+        versionName '1.9.3'
         resConfigs 'pl', 'en'
         // Powszechne architektury Android TV / Android Box; wyłączamy ABI emulatorów
         // z finalnego APK, aby natywna biblioteka VLC nie potroiła rozmiaru.
@@ -77,6 +77,7 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.13.0'
     implementation 'androidx.media3:media3-exoplayer:1.8.1'
     implementation 'androidx.media3:media3-exoplayer-hls:1.8.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.8.1'
     implementation 'androidx.media3:media3-exoplayer-rtsp:1.8.1'
     implementation 'androidx.media3:media3-ui:1.8.1'
     // Oficjalna biblioteka VideoLAN; główny silnik Live TV oraz fallback kodeków.

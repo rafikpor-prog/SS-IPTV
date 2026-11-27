@@ -84,6 +84,8 @@ import pl.rafik.ssiptv.ui.Ui;
  * Odtwarzacz TV/VOD z OSD, ulubionymi, rzeczywistą jakością z VideoSize
  * i zapamiętywaniem postępu VOD w prywatnej bazie urządzenia.
  */
+// Explicitly opt in to Media3 1.8.1 APIs used by this playback activity.
+@androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
 public final class PlayerActivity extends Activity {
     public static final String EXTRA_ID = "channel_id";
     public static final String EXTRA_EXTERNAL_URI = "external_video_uri";
@@ -101,6 +103,8 @@ public final class PlayerActivity extends Activity {
     private boolean usingVlc;
     private boolean usingPlatform;
     private boolean leftScreen;
+    private boolean initialPlaybackStarted;
+    private TextView retryPlaybackButton;
     private boolean userPaused;
     private int vlcRecoveryAttempts;
     private int exoRecoveryAttempts;
@@ -113,6 +117,9 @@ public final class PlayerActivity extends Activity {
     private boolean hasVlcVideoOutput;
     private int engineSwaps;
     private int startupRetries;
+    private int bufferMode;
+    private int exoBufferMode = -1;
+    private boolean exoBufferVod;
     private boolean retryScheduled;
     private String selectedEngine = "android";
     private String activeEngine = "android";
@@ -188,9 +195,9 @@ public final class PlayerActivity extends Activity {
     private final Runnable loadingTick = new Runnable() {
         @Override public void run() {
             if (isFinishing() || isDestroyed()) return;
-            if (!leftScreen && channel != null) {
+            if (!leftScreen && initialPlaybackStarted && channel != null && !unavailablePending) {
                 long now = SystemClock.elapsedRealtime();
-                if (!firstFrameReady && !retryScheduled) {
+                if (!firstFrameReady && !retryScheduled && !userPaused) {
                     long waitSeconds = Math.max(0, now - engineStartedAt) / 1000;
                     if (loadingMessage != null && loadingOverlay.getVisibility() == View.VISIBLE)
                         loadingMessage.setText(engineName() +
@@ -265,7 +272,6 @@ public final class PlayerActivity extends Activity {
             return;
         }
         cachedLive = liveChannels();
-        if (channel.id > 0) storage.execute(() -> database.markWatched(channel.id));
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -284,10 +290,7 @@ public final class PlayerActivity extends Activity {
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         playerView.setFocusable(true);
         playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);
-        playerView.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP) showOsd();
-            return false;
-        });
+        playerView.setOnClickListener(v -> showOsd());
         root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
         vlcView = new VLCVideoLayout(this);
         vlcView.setVisibility(View.GONE);
@@ -329,7 +332,7 @@ public final class PlayerActivity extends Activity {
         root.addView(numberOverlay, digitParams);
         numberOverlay.setVisibility(View.GONE);
 
-        startPlayback();
+        showLoading("Otwieranie odtwarzacza…");
         handler.postDelayed(saveTick, 5000);
         handler.postDelayed(updateEpg, 60000);
         refreshEpgSnapshot();
@@ -365,24 +368,47 @@ public final class PlayerActivity extends Activity {
         StreamSpec stream;
         try { stream = resolveStream(); }
         catch (Exception error) {
-            Log.w("SS-IPTV-Player", "Invalid stream", error);
+            Log.w("SS-IPTV-Player", "Invalid stream (" + error.getClass().getSimpleName() + ")");
             showSourceUnavailable();
             return;
         }
         String path = stream.url.split("\\?", 2)[0].toLowerCase(Locale.ROOT);
         adaptiveStream = path.endsWith(".m3u8") || path.endsWith(".mpd");
-        selectedEngine = new SecureSettings(this).playbackEngine();
+        SecureSettings selected = new SecureSettings(this);
+        bufferMode = selected.bufferMode();
+        selectedEngine = selected.playbackEngine();
         activeEngine = selectedEngine;
         startSelectedEngine(stream);
     }
 
     /** W awarii sieci i buforowania ponawiamy tylko wybrany przez użytkownika silnik. */
     private void startSelectedEngine(StreamSpec stream) {
-        switch (activeEngine) {
-            case "vlc": startVlc(stream); break;
-            case "media3": startExo(stream); break;
-            default: startPlatform(stream); break;
+        try {
+            switch (activeEngine) {
+                case "vlc": startVlc(stream); break;
+                case "media3": startExo(stream); break;
+                default: startPlatform(stream); break;
+            }
+        } catch (RuntimeException | LinkageError error) {
+            startupFailure("Błąd inicjalizacji " + activeEngine);
         }
+    }
+
+    /** Local engine startup failure only. Never change engine due to HTTP/network error. */
+    private void startupFailure(String reason) {
+        if (leftScreen || isFinishing() || isDestroyed()) return;
+        Log.w("SS-IPTV-Player", reason);
+        if (!firstFrameReady && engineSwaps == 0) {
+            engineSwaps++;
+            activeEngine = "vlc".equals(activeEngine) ? "media3" : "vlc";
+            showLoading("Nie udało się uruchomić silnika · próba " + activeEngine);
+            final long generation = ++playGeneration;
+            handler.post(() -> {
+                if (generation != playGeneration || leftScreen || isFinishing()) return;
+                try { startSelectedEngine(resolveStream()); }
+                catch (Exception | LinkageError failure) { showPlaybackFailure("Nie udało się uruchomić odtwarzacza. Zmień silnik w ustawieniach."); }
+            });
+        } else showPlaybackFailure(reason + " · spróbuj ponownie lub zmień silnik.");
     }
 
     /** Jednorazowe przejście na bibliotekę z dodatkowymi kodekami WYŁĄCZNIE
@@ -568,8 +594,8 @@ public final class PlayerActivity extends Activity {
             platformView.start();
             root.requestFocus();
         } catch (Exception | LinkageError error) {
-            Log.w("SS-IPTV-Player", "System MediaPlayer unavailable", error);
-            recoverPlayback("Błąd inicjalizacji Android MediaPlayer");
+            Log.w("SS-IPTV-Player", "System MediaPlayer unavailable: " + error.getClass().getSimpleName());
+            startupFailure("Błąd inicjalizacji Android MediaPlayer");
         }
     }
 
@@ -600,8 +626,8 @@ public final class PlayerActivity extends Activity {
         try {
             if (libVlc == null) {
                 ArrayList<String> options = new ArrayList<>();
-                options.add("--network-caching=" + (channel.vod ? 4500 : 1800));
-                options.add("--live-caching=1800");
+                options.add("--network-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, channel.vod));
+                options.add("--live-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, false));
                 options.add("--file-caching=" + (channel.vod ? 3500 : 1200));
                 libVlc = new LibVLC(getApplicationContext(), options);
                 libVlc.setUserAgent("SS-IPTV/1.7 (Android TV)", "SS-IPTV/1.7");
@@ -622,8 +648,8 @@ public final class PlayerActivity extends Activity {
             Media media = new Media(libVlc, Uri.parse(spec.url));
             media.setHWDecoderEnabled(true, false);
             // Krótki bufor ogranicza RAM i opóźnienia przy zappingu na Android Box.
-            media.addOption(":network-caching=" + (channel.vod ? 4500 : 1800));
-            media.addOption(":live-caching=1800");
+            media.addOption(":network-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, channel.vod));
+            media.addOption(":live-caching=" + PlaybackBufferPolicy.vlcCache(bufferMode, false));
             media.addOption(":http-reconnect=true");
             for (Map.Entry<String, String> entry : spec.headers.entrySet()) {
                 if (entry.getKey().equalsIgnoreCase("User-Agent"))
@@ -697,8 +723,8 @@ public final class PlayerActivity extends Activity {
             nativePlayer.play();
             root.requestFocus();
         } catch (Exception | LinkageError error) {
-            Log.w("SS-IPTV-Player", "VLC unavailable", error);
-            recoverPlayback("Błąd uruchamiania VLC");
+            Log.w("SS-IPTV-Player", "VLC unavailable: " + error.getClass().getSimpleName());
+            startupFailure("Błąd uruchamiania VLC");
         }
     }
 
@@ -736,17 +762,19 @@ public final class PlayerActivity extends Activity {
             httpFactory.setDefaultRequestProperties(spec.headers);
             // Zamiast niszczyć sprzętowy dekoder przy każdym CH+/CH- wykorzystujemy
             // ten sam ExoPlayer. Ograniczamy bufor TV do 16 MiB.
+            if (player != null && (exoBufferMode != bufferMode || exoBufferVod != channel.vod))
+                releaseExo();
             ExoPlayer exo = player;
             if (exo == null) {
                 ActivityManager memory = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
                 boolean smallBox = memory != null && memory.getMemoryClass() <= 128;
-                int maxBufferBytes = (channel.vod ? (smallBox ? 12 : 24) :
-                        (smallBox ? 8 : 16)) * 1024 * 1024;
+                PlaybackBufferPolicy.Plan plan = PlaybackBufferPolicy.plan(bufferMode, channel.vod, smallBox);
                 DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                        .setBufferDurationsMs(channel.vod ? 6000 : 2500,
-                                channel.vod ? 25000 : 12000, 600, 1500)
-                        .setTargetBufferBytes(maxBufferBytes)
+                        .setBufferDurationsMs(plan.minMs, plan.maxMs, plan.startMs, plan.rebufferMs)
+                        .setTargetBufferBytes(plan.targetMiB * 1024 * 1024)
                         .build();
+                exoBufferMode = bufferMode;
+                exoBufferVod = channel.vod;
                 DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
                         .setEnableDecoderFallback(true);
                 exo = new ExoPlayer.Builder(this)
@@ -847,9 +875,8 @@ public final class PlayerActivity extends Activity {
             exo.prepare();
             exo.play();
         } catch (Exception | LinkageError error) {
-            Log.w("SS-IPTV-Player", "Media3 unavailable", error);
-            setPlaybackStatus("Błąd uruchamiania odtwarzacza");
-            showOsd();
+            Log.w("SS-IPTV-Player", "Media3 unavailable: " + error.getClass().getSimpleName());
+            startupFailure("Błąd uruchamiania Media3");
         }
     }
 
@@ -875,6 +902,7 @@ public final class PlayerActivity extends Activity {
 
     /** Co 30 s diagnozujemy postęp, a po 60 s bez postępu odtwarzamy ponownie. */
     private void inspectPlayback() {
+        if (leftScreen || !initialPlaybackStarted || channel == null || unavailablePending || retryScheduled) return;
         NetworkIndicator network = NetworkIndicator.read(this);
         if (!network.connected) {
             setPlaybackStatus("Brak sieci · oczekiwanie na połączenie");
@@ -915,7 +943,7 @@ public final class PlayerActivity extends Activity {
                     player.getTotalBufferedDuration() > 12000 && lowBufferSamples == 0) {
                 qualityCap = Integer.MAX_VALUE;
                 applyQualityCap();
-                setPlaybackStatus("Media3 · Automatyczna najwyższa jakość");
+                setPlaybackStatus("Media3 · Przywrócono automatyczny dobór jakości");
             }
         }
         boolean paused = userPaused || leftScreen || channel.vod && !usingPlatform && !usingVlc &&
@@ -952,7 +980,7 @@ public final class PlayerActivity extends Activity {
                 unavailablePending) return;
         Log.w("SS-IPTV-Player", reason + " | engine=" + engineName());
         boolean networkAvailable = NetworkIndicator.read(this).connected;
-        if (UnavailableChannelPolicy.shouldAdvance(channel.vod, networkAvailable,
+        if (startupRetries >= 3 || UnavailableChannelPolicy.shouldAdvance(channel.vod, networkAvailable,
                 firstFrameReady, startupRetries)) {
             showSourceUnavailable();
             return;
@@ -998,11 +1026,14 @@ public final class PlayerActivity extends Activity {
     }
 
     private void showSourceUnavailable() {
-        if (unavailablePending || leftScreen) return;
+        showPlaybackFailure("Źródło niedostępne. Sprawdź połączenie, adres lub konto IPTV.");
+    }
+
+    private void showPlaybackFailure(String message) {
+        if (leftScreen || isFinishing()) return;
+        ++playGeneration; // Ignore stale events and pending retries after terminal failure.
         unavailablePending = true;
-        retryScheduled = true;
-        String message = channel.vod ? "Materiał jest niedostępny. Sprawdź adres lub serwer." :
-                "Źródło kanału niedostępne · kolejny kanał za 5 sekund";
+        retryScheduled = false;
         showLoading(message);
         if (loadingSpinner != null) {
             loadingSpinner.clearAnimation();
@@ -1010,14 +1041,10 @@ public final class PlayerActivity extends Activity {
         }
         setPlaybackStatus(message);
         showOsd();
-        if (channel.vod) return;
-        long generation = playGeneration;
-        handler.postDelayed(() -> {
-            if (generation != playGeneration || leftScreen || isFinishing()) return;
-            unavailablePending = false;
-            retryScheduled = false;
-            zap(1);
-        }, 5000);
+        if (retryPlaybackButton != null) {
+            retryPlaybackButton.setVisibility(View.VISIBLE);
+            retryPlaybackButton.requestFocus();
+        }
     }
 
     private void rememberVodPosition() {
@@ -1077,6 +1104,9 @@ public final class PlayerActivity extends Activity {
         loadingMessage = Ui.text(this, "Łączenie ze strumieniem…", 13, Ui.ACCENT, false);
         loadingMessage.setGravity(Gravity.CENTER);
         card.addView(loadingMessage);
+        retryPlaybackButton = Ui.button(this, "Spróbuj ponownie / OK", true, v -> startPlayback());
+        retryPlaybackButton.setVisibility(View.GONE);
+        card.addView(retryPlaybackButton, Ui.margins(this, -1, -2, 0, 12, 0, 0));
         loadingOverlay.addView(card, new FrameLayout.LayoutParams(
                 Math.min(Ui.dp(this, 380), getResources().getDisplayMetrics().widthPixels - Ui.dp(this, 40)),
                 -2, Gravity.CENTER));
@@ -1086,6 +1116,7 @@ public final class PlayerActivity extends Activity {
 
     private void showLoading(String state) {
         if (loadingOverlay == null) return;
+        if (retryPlaybackButton != null) retryPlaybackButton.setVisibility(View.GONE);
         if (!unavailablePending && loadingSpinner != null)
             loadingSpinner.setVisibility(View.VISIBLE);
         loadingChannel.setText(channel.name);
@@ -1751,6 +1782,7 @@ public final class PlayerActivity extends Activity {
         // Kilka szybkich naciśnięć pilota oznacza jeden ostatni wybór.
         pendingZap = () -> {
             pendingZap = null;
+            if (leftScreen || isFinishing() || isDestroyed()) { retryScheduled = true; return; }
             startPlayback();
         };
         handler.postDelayed(pendingZap, 260);
@@ -1797,6 +1829,8 @@ public final class PlayerActivity extends Activity {
     }
 
     private boolean handleRemoteKey(int keyCode) {
+        if (channel == null) return false;
+        if (unavailablePending && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) { startPlayback(); return true; }
         int channelStep = PlayerRemoteRules.channelStepForKeyCode(keyCode);
         if (channelStep != 0 && !channel.vod) { zap(channelStep); return true; }
         int vodSeekOffset = PlayerRemoteRules.vodSeekOffsetForKeyCode(keyCode);
@@ -1907,24 +1941,41 @@ public final class PlayerActivity extends Activity {
     }
 
     private void saveProgress() {
-        if (!channel.vod || channel.id <= 0) return;
-        if (!usingPlatform && !usingVlc && player == null) return;
+        if (channel == null || !channel.vod || channel.id <= 0 || !firstFrameReady) return;
+        if (usingPlatform ? platformPlayer == null || platformView == null : usingVlc ? vlcPlayer == null : player == null) return;
         long pos = Math.max(0, usingPlatform && platformView != null ?
                 platformView.getCurrentPosition() : usingVlc && vlcPlayer != null ?
                 vlcPlayer.getTime() : player.getCurrentPosition());
         long dur = Math.max(0, usingPlatform && platformView != null ?
                 platformView.getDuration() : usingVlc && vlcPlayer != null ?
                 vlcPlayer.getLength() : player.getDuration());
-        if (dur > 0 && pos > dur - 15000) pos = 0;
+        if (dur <= 0 || dur == C.TIME_UNSET) return;
+        if (pos > dur - 15000) pos = 0;
         final long lastPosition = pos;
-        storage.execute(() -> database.savePlayback(channel.id, lastPosition, dur));
+        final long savedId = channel.id;
+        storage.execute(() -> database.savePlayback(savedId, lastPosition, dur));
         updateProgressLabel();
     }
 
     @Override protected void onStart() {
         super.onStart();
         leftScreen = false;
+        if (channel == null || root == null) return;
         watchdog.reset(SystemClock.elapsedRealtime());
+        if (!initialPlaybackStarted || retryScheduled) {
+            root.post(() -> {
+                if (leftScreen || isFinishing() || isDestroyed()) return;
+                if (!initialPlaybackStarted || retryScheduled) {
+                    initialPlaybackStarted = true;
+                    startPlayback();
+                }
+            });
+            return;
+        }
+        if (userPaused || unavailablePending) return;
+        lastPlaybackEventAt = SystemClock.elapsedRealtime();
+        lastSamplePosition = -1;
+        lastSampleTraffic = -1;
         if (player != null) player.play();
         if (usingPlatform && platformView != null) platformView.start();
         if (vlcPlayer != null && !vlcPlayer.isPlaying()) vlcPlayer.play();
@@ -1932,6 +1983,10 @@ public final class PlayerActivity extends Activity {
 
     @Override protected void onStop() {
         leftScreen = true;
+        if (retryScheduled || (initialPlaybackStarted && !firstFrameReady && !unavailablePending)) {
+            ++playGeneration;
+            retryScheduled = true;
+        }
         saveProgress();
         if (player != null) player.pause();
         if (usingPlatform && platformView != null && platformView.isPlaying()) platformView.pause();

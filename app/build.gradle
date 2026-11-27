@@ -11,8 +11,8 @@ android {
         applicationId 'pl.rafik.ssiptv'
         minSdk 26
         targetSdk 35
-        versionCode 15
-        versionName '1.9.4'
+        versionCode 16
+        versionName '1.9.5'
         resConfigs 'pl', 'en'
         // Powszechne architektury Android TV / Android Box; wyłączamy ABI emulatorów
         // z finalnego APK, aby natywna biblioteka VLC nie potroiła rozmiaru.
@@ -49,6 +49,8 @@ android {
         }
     }
 
+    testOptions { unitTests.includeAndroidResources = true }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -68,6 +70,7 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
     // Spójne aktualne wersje zależności przechodnich bibliotek Media3.
     implementation 'androidx.annotation:annotation:1.8.1'
     implementation 'androidx.concurrent:concurrent-futures:1.1.0'

@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     guides = current;
                     if (adapter != null) adapter.notifyDataSetChanged();
+                    if (nativeChannels != null) nativeChannels.refreshLabels();
                 });
             });
             uiHandler.postDelayed(this, 60000);
@@ -107,6 +108,7 @@ public final class MainActivity extends Activity {
     private String activationStatus = "Jeszcze nie wybrano kanału";
     private TextView activationLabel;
     private Channel selectedForPlayback;
+    private pl.rafik.ssiptv.ui.NativeChannelPage nativeChannels;
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, Integer> liveOrdinals = new HashMap<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
@@ -179,11 +181,13 @@ public final class MainActivity extends Activity {
             if (isCatalogTab() && ("Ulubione".equals(tab) || "Ostatnie".equals(tab)))
                 filterChannels();
             else if (adapter != null) adapter.notifyDataSetChanged();
+                    if (nativeChannels != null) nativeChannels.refreshLabels();
             io.execute(() -> {
                 Map<Long, ChannelDatabase.Guide> current = database.readGuides();
                 runOnUiThread(() -> {
                     guides = current;
                     if (adapter != null) adapter.notifyDataSetChanged();
+                    if (nativeChannels != null) nativeChannels.refreshLabels();
                 });
             });
         }
@@ -286,6 +290,7 @@ public final class MainActivity extends Activity {
         }
         tab = name;
         selectedForPlayback = null;
+        nativeChannels = null;
         activationLabel = null;
         sectionCaption = null;
         tvCollection = null;
@@ -757,7 +762,7 @@ public final class MainActivity extends Activity {
         guide.setOnClickListener(v -> showTab("EPG"));
         top.addView(guide);
         home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
-        String subline = "Telewizja".equals(tab) ? "Kanały, kategorie i program na żywo" :
+        String subline = "Telewizja".equals(tab) ? "Kanały · kliknij nazwę lub OK · natywne sterowanie A4.1" :
                 "VOD".equals(tab) ? "Okładki, opisy i kontynuowanie oglądania" :
                 "Seriale".equals(tab) ? "Sezony, odcinki i zapis postępu każdego odcinka" :
                 "Ulubione".equals(tab) ? "Ulubione kanały i filmy w jednym miejscu" :
@@ -842,6 +847,7 @@ public final class MainActivity extends Activity {
         if (channel == null || isFinishing() || isDestroyed()) return;
         selectedForPlayback = channel;
         activationCount++;
+        PlaybackTrace.begin(this, tvMode ? "TV" : "zwykły");
         activationStatus = "Aktywacja #" + activationCount + " · " + event + " · " + (tvMode ? "TV" : "zwykły");
         if (activationLabel != null) activationLabel.setText("Otwieranie pozycji…");
         openContent(channel);
@@ -861,6 +867,17 @@ public final class MainActivity extends Activity {
         if (resultsFrame == null) return;
         resultsFrame.removeAllViews();
         adapter = new ChannelAdapter();
+        if (!tvMode && "Telewizja".equals(tab)) {
+            // No AdapterView, clickable descendants, or selector interception in regular TV.
+            nativeChannels = new pl.rafik.ssiptv.ui.NativeChannelPage(this, isTiled(),
+                    ch -> channelDescription(ch, guides.get(ch.id)),
+                    ch -> activateCatalog(ch, "natywny przycisk"),
+                    ch -> { selectedForPlayback = ch; if (activationLabel != null) activationLabel.setText("Wybrano: " + ch.name); },
+                    this::toggleFavorite);
+            resultsFrame.addView(nativeChannels, new FrameLayout.LayoutParams(-1, -1));
+            filterChannels();
+            return;
+        }
         android.widget.AdapterView<?> collection;
         if (isTiled()) {
             GridView grid = new GridView(this);
@@ -992,6 +1009,7 @@ public final class MainActivity extends Activity {
         selectedForPlayback = null;
         adapter.visible = result;
         adapter.notifyDataSetChanged();
+        if (nativeChannels != null) nativeChannels.setChannels(result);
         if (activationLabel != null) activationLabel.setText("Wybierz pozycję z listy");
         if (sectionCaption != null) sectionCaption.setText(result.size() + " pozycji");
         if (tvCount != null) tvCount.setText(result.size() + " pozycji  •  " + selectedGroup);
@@ -1230,14 +1248,19 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.4 (A4)", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.5 (A4.1 – naprawa)", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
         about.addView(Ui.text(this, "Listy M3U są w prywatnej pamięci aplikacji. Hasło " +
                 "serwera jest szyfrowane przez Android Keystore.",
                 12, Ui.ACCENT, false));
-        about.addView(Ui.text(this, "Diagnostyka aktywacji (bieżąca sesja): " + activationStatus, 12, Ui.SECONDARY, false));
+        about.addView(Ui.text(this, "Diagnostyka aktywacji: " + PlaybackTrace.read(this), 13, Ui.WHITE, false));
+        about.addView(Ui.button(this, "Kopiuj diagnostykę odtwarzania", false, v -> {
+            android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SS-IPTV", "1.9.5 A4.1 | " + PlaybackTrace.read(this)));
+            toast("Skopiowano anonimową diagnostykę.");
+        }), Ui.margins(this, -1, 48, 0, 6, 0, 0));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout screenCard = card();
@@ -1459,11 +1482,12 @@ public final class MainActivity extends Activity {
     private void play(Channel channel) {
         Intent intent = new Intent(this, PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_ID, channel.id);
+        PlaybackTrace.stage(this, "Wysyłanie Intent do odtwarzacza");
         startActivity(intent);
     }
 
     private void openContent(Channel channel) {
-        if (channel == null || !pl.rafik.ssiptv.data.CatalogActivation.canOpen(channel.id, channel.isSeries(), channel.seriesId, channel.source)) { toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
+        if (channel == null || !pl.rafik.ssiptv.data.CatalogActivation.canOpen(channel.id, channel.isSeries(), channel.seriesId, channel.source)) { PlaybackTrace.stage(this, "Odrzucono identyfikator pozycji"); toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
         long now = android.os.SystemClock.elapsedRealtime();
         if (now - lastOpenAt < 400L) return;
         lastOpenAt = now;
@@ -1478,7 +1502,7 @@ public final class MainActivity extends Activity {
             startActivity(intent);
         } else play(channel);
         activationStatus += " · wysłano Intent";
-        } catch (RuntimeException error) { lastOpenAt = -1000L; activationStatus += " · błąd otwarcia: " + error.getClass().getSimpleName(); toast("Nie udało się otworzyć odtwarzacza. Sprawdź ustawienia silnika."); }
+        } catch (RuntimeException error) { lastOpenAt = -1000L; PlaybackTrace.stage(this, "Błąd otwarcia aktywności"); activationStatus += " · błąd otwarcia: " + error.getClass().getSimpleName(); toast("Nie udało się otworzyć odtwarzacza. Sprawdź ustawienia silnika."); }
     }
 
     /** Gwarantowany OK na zaznaczonym wierszu/kafelku; nie oddajemy go serduszku. */
@@ -1504,6 +1528,7 @@ public final class MainActivity extends Activity {
             exitApp();
             return true;
         }
+        if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_RED && nativeChannels != null && nativeChannels.hasFocus() && selectedForPlayback != null) { toggleFavorite(selectedForPlayback); return true; }
         if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_RED && tvCollection != null && tvCollection.isAttachedToWindow() && tvCollection.hasFocus() && adapter != null) {
             int index = pl.rafik.ssiptv.data.CatalogActivation.position(tvCollection.getSelectedItemPosition(), tvCollection.getFirstVisiblePosition(), adapter.getCount());
             if (index >= 0) { toggleFavorite(adapter.visible.get(index)); return true; }

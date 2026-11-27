@@ -245,6 +245,7 @@ public final class PlayerActivity extends Activity {
 
     @Override public void onCreate(@Nullable Bundle saved) {
         super.onCreate(saved);
+        PlaybackTrace.stage(this, "PlayerActivity.onCreate");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().getDecorView().setSystemUiVisibility(
@@ -267,10 +268,12 @@ public final class PlayerActivity extends Activity {
             }
         }
         if (channel == null) {
+            PlaybackTrace.stage(this, "Nie znaleziono kanału w bazie");
             Toast.makeText(this, "Nie znaleziono kanału lub filmu", Toast.LENGTH_LONG).show();
             finish();
             return;
         }
+        PlaybackTrace.stage(this, "Znaleziono kanał w bazie");
         cachedLive = liveChannels();
 
         root = new FrameLayout(this);
@@ -344,6 +347,7 @@ public final class PlayerActivity extends Activity {
 
     /** Odtwarzacz jest odtwarzany wewnątrz tej samej aktywności przy zmianie kanału. */
     private void startPlayback() {
+        PlaybackTrace.stage(this, "startPlayback");
         ++playGeneration;
         vlcRecoveryAttempts = 0;
         exoRecoveryAttempts = 0;
@@ -378,6 +382,7 @@ public final class PlayerActivity extends Activity {
         bufferMode = selected.bufferMode();
         selectedEngine = selected.playbackEngine();
         activeEngine = selectedEngine;
+        PlaybackTrace.stage(this, "Inicjalizacja silnika: " + ("vlc".equals(activeEngine) ? "VLC" : "media3".equals(activeEngine) ? "Media3" : "Android"));
         startSelectedEngine(stream);
     }
 
@@ -1031,6 +1036,7 @@ public final class PlayerActivity extends Activity {
 
     private void showPlaybackFailure(String message) {
         if (leftScreen || isFinishing()) return;
+        PlaybackTrace.stage(this, "Końcowy błąd odtwarzania");
         ++playGeneration; // Ignore stale events and pending retries after terminal failure.
         unavailablePending = true;
         retryScheduled = false;
@@ -1139,6 +1145,7 @@ public final class PlayerActivity extends Activity {
                 loadingOverlay.getVisibility() == View.VISIBLE;
         if (!firstReady && !overlayWasVisible) return;
         firstFrameReady = true;
+        if (firstReady) PlaybackTrace.stage(this, "Odebrano pierwszą klatkę / gotowość odtwarzania");
         startupRetries = 0;
         lastPlaybackEventAt = SystemClock.elapsedRealtime();
         watchdog.heartbeat(lastPlaybackEventAt);

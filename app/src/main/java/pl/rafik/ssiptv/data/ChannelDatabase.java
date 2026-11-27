@@ -376,6 +376,33 @@ public final class ChannelDatabase extends SQLiteOpenHelper {
         }
     }
 
+    public static final class ProgrammeHit {
+        public final long channelId, start;
+        public final String channelName, title;
+        ProgrammeHit(long channelId, long start, String channelName, String title) {
+            this.channelId = channelId; this.start = start; this.channelName = channelName; this.title = title;
+        }
+    }
+
+    /** Existing schema 5: chronological local EPG search, parameterized and bounded. */
+    public synchronized List<ProgrammeHit> searchProgrammes(String phrase, String source) {
+        List<ProgrammeHit> hits = new ArrayList<>();
+        if (phrase == null || phrase.trim().isEmpty() || phrase.length() > 160) return hits;
+        long now = System.currentTimeMillis();
+        String selected = source == null ? "" : source;
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT p.channel_id,p.start_ms,c.name,p.title,p.description FROM epg_programmes p " +
+                "JOIN channels c ON c._id=p.channel_id WHERE p.end_ms>? AND p.start_ms<? " +
+                "AND c.is_vod=0 AND (?='' OR c.source=?) ORDER BY p.start_ms,p.channel_id",
+                new String[]{Long.toString(now), Long.toString(now + 86400000L), selected, selected})) {
+            while (c.moveToNext() && hits.size() < 256) {
+                if (LibrarySearch.matches(phrase, c.getString(2), c.getString(3), c.getString(4)))
+                    hits.add(new ProgrammeHit(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3)));
+            }
+        }
+        return hits;
+    }
+
     public synchronized Map<Long, Guide> readGuides() {
         Map<Long, Guide> guides = new HashMap<>();
         final long now = System.currentTimeMillis();

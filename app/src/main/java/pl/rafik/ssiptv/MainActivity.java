@@ -74,7 +74,6 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     guides = current;
                     if (adapter != null) adapter.notifyDataSetChanged();
-                    if (nativeChannels != null) nativeChannels.refreshLabels();
                 });
             });
             uiHandler.postDelayed(this, 60000);
@@ -108,7 +107,6 @@ public final class MainActivity extends Activity {
     private String activationStatus = "Jeszcze nie wybrano kanału";
     private TextView activationLabel;
     private Channel selectedForPlayback;
-    private pl.rafik.ssiptv.ui.NativeChannelPage nativeChannels;
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, Integer> liveOrdinals = new HashMap<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
@@ -181,13 +179,11 @@ public final class MainActivity extends Activity {
             if (isCatalogTab() && ("Ulubione".equals(tab) || "Ostatnie".equals(tab)))
                 filterChannels();
             else if (adapter != null) adapter.notifyDataSetChanged();
-                    if (nativeChannels != null) nativeChannels.refreshLabels();
             io.execute(() -> {
                 Map<Long, ChannelDatabase.Guide> current = database.readGuides();
                 runOnUiThread(() -> {
                     guides = current;
                     if (adapter != null) adapter.notifyDataSetChanged();
-                    if (nativeChannels != null) nativeChannels.refreshLabels();
                 });
             });
         }
@@ -290,7 +286,6 @@ public final class MainActivity extends Activity {
         }
         tab = name;
         selectedForPlayback = null;
-        nativeChannels = null;
         activationLabel = null;
         sectionCaption = null;
         tvCollection = null;
@@ -298,7 +293,8 @@ public final class MainActivity extends Activity {
         resultsFrame = null;
         chips = null;
         tvCount = null;
-        if (tvMode) {
+        // Both layouts now use the same catalog screen and the same AdapterView input path.
+        if (tvMode || isCatalogName(name)) {
             showTvScreen(name);
             return;
         }
@@ -320,7 +316,7 @@ public final class MainActivity extends Activity {
             return insets;
         });
         main.requestApplyInsets();
-        if (!compactRegularTv()) main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
+        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
         main.addView(primaryNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         content = Ui.column(this);
         main.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -328,7 +324,7 @@ public final class MainActivity extends Activity {
             case "Źródła": showSources(); break;
             case "EPG": showGuide(); break;
             case "Ustawienia": showSettings(); break;
-            default: showChannels(); break;
+            default: showTab("Telewizja"); break;
         }
         // Shared horizontal navigation; leave the remaining height for the catalog.
     }
@@ -337,8 +333,25 @@ public final class MainActivity extends Activity {
     private void showTvScreen(String name) {
         main = Ui.column(this);
         main.setBackgroundColor(Ui.BG);
-        main.setPadding(Ui.dp(this, 18), Ui.dp(this, 14), Ui.dp(this, 18), Ui.dp(this, 14));
+        int side = Ui.dp(this, tvMode ? 18 : 8);
+        int vertical = Ui.dp(this, tvMode ? 14 : 4);
+        main.setPadding(side, vertical, side, vertical);
         setContentView(main);
+        if (!tvMode) {
+            main.setOnApplyWindowInsetsListener((view, insets) -> {
+                int top, bottom, left, right;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    top=bars.top; bottom=bars.bottom; left=bars.left; right=bars.right;
+                } else {
+                    top=insets.getSystemWindowInsetTop(); bottom=insets.getSystemWindowInsetBottom();
+                    left=insets.getSystemWindowInsetLeft(); right=insets.getSystemWindowInsetRight();
+                }
+                view.setPadding(side+left,vertical+top,side+right,vertical+bottom);
+                return insets;
+            });
+            main.requestApplyInsets();
+        }
         main.addView(primaryNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         tvRoot = new FrameLayout(this);
         main.addView(tvRoot, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -374,10 +387,10 @@ public final class MainActivity extends Activity {
         menu.setOnClickListener(v -> openTvDrawer());
         Ui.tvFocus(menu);
         rail.addView(menu, new LinearLayout.LayoutParams(-1, Ui.dp(this, 66)));
-        layout.addView(rail, new LinearLayout.LayoutParams(Ui.dp(this, 72), -1));
+        if (tvMode) layout.addView(rail, new LinearLayout.LayoutParams(Ui.dp(this, 72), -1));
 
         content = Ui.column(this);
-        content.setPadding(Ui.dp(this, 13), 0, 0, 0);
+        content.setPadding(Ui.dp(this, tvMode ? 13 : 0), 0, 0, 0);
         layout.addView(content, new LinearLayout.LayoutParams(0, -1, 1));
         tvCount = null;
         tvCollection = null;
@@ -403,14 +416,21 @@ public final class MainActivity extends Activity {
                         getResources().getDisplayMetrics().widthPixels - Ui.dp(this, 65)),
                 -1, Gravity.LEFT);
         tvRoot.addView(tvDrawer, drawerParams);
-        if (isCatalogTab() && tvCollection != null && adapter != null &&
+        if (tvMode && isCatalogTab() && tvCollection != null && adapter != null &&
                 adapter.getCount() > 0) focusTvCollection();
-        else menu.requestFocus();
+        else if (tvMode) menu.requestFocus();
     }
 
     private void showTvChannels() {
-        boolean compactTv = tvMode &&
-                getResources().getConfiguration().screenHeightDp < 500;
+        boolean compactTv = getResources().getConfiguration().screenHeightDp < 500;
+        if (!tvMode) {
+            LinearLayout actions = Ui.row(this);
+            TextView search = Ui.button(this, query.isEmpty() ? "Szukaj" : "Zmień filtr", false, v -> showCatalogSearch());
+            actions.addView(search, new LinearLayout.LayoutParams(0, Ui.dp(this,48), 1));
+            TextView choose = Ui.button(this, "Wybierz pozycję", true, v -> showNativePicker());
+            actions.addView(choose, new LinearLayout.LayoutParams(0, Ui.dp(this,48), 1));
+            content.addView(actions, Ui.margins(this,-1,48,0,0,0,4));
+        }
         if (isMediaTab()) {
             LinearLayout showcase = Ui.column(this);
             showcase.setPadding(Ui.dp(this, compactTv ? 12 : 20),
@@ -448,9 +468,11 @@ public final class MainActivity extends Activity {
             categoriesButton.setPadding(Ui.dp(this, 13), 0, Ui.dp(this, 13), 0);
             categoriesButton.setBackground(Ui.rounded(this, Ui.SURFACE, 11));
             categoriesButton.setOnClickListener(v -> {
-                openTvDrawer();
-                tvCategoryDrawerMode = true;
-                populateTvDrawer();
+                if (tvMode) {
+                    openTvDrawer();
+                    tvCategoryDrawerMode = true;
+                    populateTvDrawer();
+                } else showCategoryPicker();
             });
             Ui.tvFocus(categoriesButton);
             filters.addView(categoriesButton, Ui.margins(this, -2, 42, 0, 0, 9, 0));
@@ -468,10 +490,12 @@ public final class MainActivity extends Activity {
                 "VOD".equals(tab) ? "FILMY VOD" :
                 "Seriale".equals(tab) ? "SERIALE" :
                 "Ulubione".equals(tab) ? "ULUBIONE" : "OSTATNIO OGLĄDANE";
-        TextView title = Ui.text(this, heading, compactTv ? 19 : 25, Ui.WHITE, true);
-        titleRow.addView(title);
+        TextView title = Ui.text(this, heading, compactTv || !tvMode ? 16 : 25, Ui.WHITE, true);
+        if (tvMode) titleRow.addView(title);
         tvCount = Ui.text(this, "", 14, Ui.ACCENT, true);
-        tvCount.setPadding(Ui.dp(this, 20), 0, 0, 0);
+        tvCount.setPadding(Ui.dp(this, tvMode ? 20 : 2), 0, 0, 0);
+        tvCount.setMaxLines(2);
+        tvCount.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titleRow.addView(tvCount, new LinearLayout.LayoutParams(0, -2, 1));
         if ("Telewizja".equals(tab)) {
             TextView listToggle = tvModeToggle("Lista", !isTiled(), () -> setTiled(false));
@@ -486,7 +510,7 @@ public final class MainActivity extends Activity {
             titleRow.addView(hint);
         }
         content.addView(titleRow, Ui.margins(this, -1, compactTv ? 44 : 62, 0, 0, 0, 5));
-        addActivationBar(content);
+        if (tvMode) addActivationBar(content);
         resultsFrame = new FrameLayout(this);
         content.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();
@@ -642,7 +666,7 @@ public final class MainActivity extends Activity {
 
     private void focusTvCollection() {
         if (tvCollection != null && adapter != null && adapter.getCount() > 0) {
-            tvCollection.setFocusableInTouchMode(true);
+            tvCollection.setFocusableInTouchMode(tvMode);
             tvCollection.requestFocus();
             if (tvCollection.getSelectedItemPosition() < 0) tvCollection.setSelection(0);
         }
@@ -746,87 +770,37 @@ public final class MainActivity extends Activity {
 
     private boolean isTiled() { return isMediaTab() ? mediaGrid : tiled; }
 
-    private boolean compactRegularTv() {
-        return !tvMode && "Telewizja".equals(tab) && getResources().getConfiguration().screenHeightDp < 500;
+    private void showCatalogSearch() {
+        EditText search = input("Nazwa kanału lub programu", false);
+        search.setText(query);
+        new AlertDialog.Builder(this).setTitle("Szukaj w katalogu").setView(search)
+                .setPositiveButton("Szukaj", (dialog, which) -> {
+                    query = search.getText().toString().trim();
+                    filterChannels();
+                }).setNeutralButton("Wyczyść", (dialog, which) -> {
+                    query = ""; filterChannels();
+                }).setNegativeButton("Anuluj", null).show();
     }
 
-    private void showChannels() {
-        boolean compact = compactRegularTv();
-        LinearLayout home = Ui.column(this);
-        home.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), 0);
-        content.addView(home, new LinearLayout.LayoutParams(-1, -1));
-        LinearLayout top = Ui.row(this);
-        String headline = "Telewizja".equals(tab) ? "Telewizja na żywo" :
-                "VOD".equals(tab) ? "Biblioteka filmów" :
-                "Seriale".equals(tab) ? "Twoje seriale" :
-                "Ulubione".equals(tab) ? "Twoje ulubione" : "Ostatnio oglądane";
-        TextView title = Ui.text(this, headline, 22, Ui.WHITE, true);
-        top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView guide = Ui.text(this, "EPG ›", 12, Ui.ACCENT, true);
-        guide.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 9));
-        guide.setOnClickListener(v -> showTab("EPG"));
-        top.addView(guide);
-        if (!compact) home.addView(top, Ui.margins(this, -1, 42, 0, 0, 0, 2));
-        String subline = "Telewizja".equals(tab) ? "Kanały · kliknij nazwę lub OK · natywne sterowanie A4.1" :
-                "VOD".equals(tab) ? "Okładki, opisy i kontynuowanie oglądania" :
-                "Seriale".equals(tab) ? "Sezony, odcinki i zapis postępu każdego odcinka" :
-                "Ulubione".equals(tab) ? "Ulubione kanały i filmy w jednym miejscu" :
-                "Twoja historia odtwarzania";
-        if (!compact) home.addView(Ui.text(this, subline, 12, Ui.SECONDARY, false),
-                Ui.margins(this, -1, -2, 0, 0, 0, 12));
-        LinearLayout filtersPanel = Ui.column(this);
+    private void showCategoryPicker() {
+        List<String> groups = tvCategoryNames();
+        new AlertDialog.Builder(this).setTitle("Kategorie")
+                .setSingleChoiceItems(groups.toArray(new String[0]), groups.indexOf(selectedGroup), (dialog, which) -> {
+                    selectedGroup = groups.get(which);
+                    dialog.dismiss(); updateChips(); filterChannels();
+                }).setNegativeButton("Anuluj", null).show();
+    }
 
-        EditText search = input("⌕  Szukaj kanału lub programu", false);
-        search.setSingleLine(true);
-        search.setTextSize(14);
-        search.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                query = s.toString().trim().toLowerCase(Locale.ROOT);
-                filterChannels();
-            }
-            @Override public void afterTextChanged(Editable e) {}
-        });
-        if (!query.isEmpty()) search.setText(query);
-        filtersPanel.addView(search, Ui.margins(this, -1, 48, 0, 0, 0, 11));
-
-        HorizontalScrollView categories = new HorizontalScrollView(this);
-        categories.setHorizontalScrollBarEnabled(false);
-        chips = Ui.row(this);
-        categories.addView(chips);
-        if ("Telewizja".equals(tab) || "VOD".equals(tab) || "Seriale".equals(tab))
-            filtersPanel.addView(categories, Ui.margins(this, -1, 48, 0, 0, 0, 5));
-        updateChips();
-        filtersPanel.setVisibility(compact ? View.GONE : View.VISIBLE);
-        home.addView(filtersPanel, new LinearLayout.LayoutParams(-1, -2));
-
-        LinearLayout heading = Ui.row(this);
-        sectionCaption = Ui.text(this, "0 kanałów", 12, Ui.ACCENT, true);
-        heading.addView(sectionCaption, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView list = Ui.text(this, "Lista", 12, isTiled() ? Ui.SECONDARY : Ui.ACCENT, !isTiled());
-        list.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
-        list.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
-        heading.addView(list, Ui.margins(this, -2, -2, 0, 0, 6, 0));
-        TextView tiles = Ui.text(this, "Kafelki", 12, isTiled() ? Ui.ACCENT : Ui.SECONDARY, isTiled());
-        tiles.setPadding(Ui.dp(this, 12), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
-        tiles.setBackground(Ui.rounded(this, Ui.SURFACE, 10));
-        heading.addView(tiles);
-        list.setOnClickListener(v -> setTiled(false));
-        tiles.setOnClickListener(v -> setTiled(true));
-        if (compact) {
-            TextView filters = Ui.button(this, "Filtry", false, v -> {
-                boolean show = filtersPanel.getVisibility() != View.VISIBLE;
-                filtersPanel.setVisibility(show ? View.VISIBLE : View.GONE);
-                if (!show) { search.clearFocus(); android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE); if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(),0); }
-            });
-            heading.addView(filters, Ui.margins(this, -2, 42, 6, 0, 0, 0));
-        }
-        home.addView(heading, Ui.margins(this, -1, 42, 0, 0, 0, 4));
-
-        if (!compact) addActivationBar(home);
-        resultsFrame = new FrameLayout(this);
-        home.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
-        renderCollection();
+    /** Independent standard Android dialog: no catalog hit testing or focus state required. */
+    private void showNativePicker() {
+        if (adapter == null || adapter.visible.isEmpty()) { toast("Brak pozycji. Sprawdź źródło i filtry."); return; }
+        List<Channel> snapshot = new ArrayList<>(adapter.visible);
+        List<String> labels = new ArrayList<>(snapshot.size());
+        for (Channel channel : snapshot) labels.add(channel.name);
+        new AlertDialog.Builder(this).setTitle("Wybierz pozycję do otwarcia")
+                .setAdapter(new android.widget.ArrayAdapter<>(this, android.R.layout.simple_list_item_1, labels),
+                        (dialog, which) -> activateCatalog(snapshot.get(which), "systemowe okno wyboru"))
+                .setNegativeButton("Anuluj", null).show();
     }
 
     private void setTiled(boolean enabled) {
@@ -869,31 +843,10 @@ public final class MainActivity extends Activity {
         openContent(channel);
     }
 
-    private TextView cardPlay(Channel channel) {
-        TextView play = Ui.button(this, channel.isSeries() || channel.isMovie() || channel.isEpisode() ? "Otwórz" : "Odtwórz", true,
-                v -> activateCatalog(channel, "przycisk karty"));
-        // Adapter owns keyboard selection; explicit button owns touch/mouse.
-        play.setFocusable(false);
-        play.setFocusableInTouchMode(false);
-        play.setContentDescription("Otwórz: " + channel.name);
-        return play;
-    }
-
     private void renderCollection() {
         if (resultsFrame == null) return;
         resultsFrame.removeAllViews();
         adapter = new ChannelAdapter();
-        if (!tvMode && "Telewizja".equals(tab)) {
-            // No AdapterView, clickable descendants, or selector interception in regular TV.
-            nativeChannels = new pl.rafik.ssiptv.ui.NativeChannelPage(this, isTiled(),
-                    ch -> channelDescription(ch, guides.get(ch.id)),
-                    ch -> activateCatalog(ch, "natywny przycisk"),
-                    ch -> { selectedForPlayback = ch; if (activationLabel != null) activationLabel.setText("Wybrano: " + ch.name); },
-                    this::toggleFavorite);
-            resultsFrame.addView(nativeChannels, new FrameLayout.LayoutParams(-1, -1));
-            filterChannels();
-            return;
-        }
         android.widget.AdapterView<?> collection;
         if (isTiled()) {
             GridView grid = new GridView(this);
@@ -917,25 +870,10 @@ public final class MainActivity extends Activity {
             list.setAdapter(adapter);
             collection = list;
         }
-        // The layout preference must never change input semantics.
-        AbsListView items = (AbsListView) collection;
-        items.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-        if (items instanceof ListView) ((ListView) items).setItemsCanFocus(false);
-        items.setSelector(Ui.tvSelection(this));
-        items.setDrawSelectorOnTop(true);
-        items.setFocusable(true);
-        items.setFocusableInTouchMode(true);
         tvCollection = collection;
-        collection.setOnItemLongClickListener((parent, child, position, id) -> {
-            Object selected = parent.getItemAtPosition(position);
-            if (!(selected instanceof Channel)) return false;
-            toggleFavorite((Channel) selected);
-            return true;
-        });
-        collection.setOnItemClickListener((parent, view, position, id) -> {
-            Object selected = parent.getItemAtPosition(position);
-            if (selected instanceof Channel) activateCatalog((Channel) selected, "kliknięcie listy");
-        });
+        pl.rafik.ssiptv.ui.CatalogInput.bind((AbsListView)collection, tvMode,
+                channel -> activateCatalog(channel, "kliknięcie katalogu"),
+                this::toggleFavorite);
         collection.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 Object value = parent.getItemAtPosition(position);
@@ -1025,7 +963,6 @@ public final class MainActivity extends Activity {
         selectedForPlayback = null;
         adapter.visible = result;
         adapter.notifyDataSetChanged();
-        if (nativeChannels != null) nativeChannels.setChannels(result);
         if (activationLabel != null) activationLabel.setText("Wybierz pozycję z listy");
         if (sectionCaption != null) sectionCaption.setText(result.size() + " pozycji");
         if (tvCount != null) tvCount.setText(result.size() + " pozycji  •  " + selectedGroup);
@@ -1264,7 +1201,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.5 (A4.1 – naprawa)", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.6 (A4.2)", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1274,7 +1211,7 @@ public final class MainActivity extends Activity {
         about.addView(Ui.text(this, "Diagnostyka aktywacji: " + PlaybackTrace.read(this), 13, Ui.WHITE, false));
         about.addView(Ui.button(this, "Kopiuj diagnostykę odtwarzania", false, v -> {
             android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SS-IPTV", "1.9.5 A4.1 | " + PlaybackTrace.read(this)));
+            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SS-IPTV", 1.9.6 A4.2 | " + PlaybackTrace.read(this)));
             toast("Skopiowano anonimową diagnostykę.");
         }), Ui.margins(this, -1, 48, 0, 6, 0, 0));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
@@ -1282,7 +1219,7 @@ public final class MainActivity extends Activity {
         LinearLayout screenCard = card();
         screenCard.addView(Ui.text(this, "Interfejs ekranu", 18, Ui.WHITE, true));
         screenCard.addView(Ui.text(this,
-                "Tryb TV zmienia tylko układ. Odtwarzanie, kliknięcia i przycisk OK działają również w zwykłym widoku. " +
+                "Tryb TV zmienia układ i nawigację. Oba tryby korzystają teraz z tego samego katalogu. " +
                 "Możesz włączyć go również na Android Box bez certyfikacji Android TV.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 12));
         screenCard.addView(Ui.button(this, tvMode ? "Tryb TV: wyłącz" :
@@ -1505,7 +1442,7 @@ public final class MainActivity extends Activity {
     private void openContent(Channel channel) {
         if (channel == null || !pl.rafik.ssiptv.data.CatalogActivation.canOpen(channel.id, channel.isSeries(), channel.seriesId, channel.source)) { PlaybackTrace.stage(this, "Odrzucono identyfikator pozycji"); toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
         long now = android.os.SystemClock.elapsedRealtime();
-        if (now - lastOpenAt < 400L) return;
+        if (now - lastOpenAt < 400L) { PlaybackTrace.stage(this, "Powtórne polecenie w ciągu 400 ms"); return; }
         lastOpenAt = now;
         try {
         if (channel.isSeries() || channel.isEpisode() || channel.isMovie()) {
@@ -1544,7 +1481,6 @@ public final class MainActivity extends Activity {
             exitApp();
             return true;
         }
-        if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_RED && nativeChannels != null && nativeChannels.hasFocus() && selectedForPlayback != null) { toggleFavorite(selectedForPlayback); return true; }
         if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_RED && tvCollection != null && tvCollection.isAttachedToWindow() && tvCollection.hasFocus() && adapter != null) {
             int index = pl.rafik.ssiptv.data.CatalogActivation.position(tvCollection.getSelectedItemPosition(), tvCollection.getFirstVisiblePosition(), adapter.getCount());
             if (index >= 0) { toggleFavorite(adapter.visible.get(index)); return true; }
@@ -1594,12 +1530,12 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (tvMode && tvDrawer != null && tvDrawer.getVisibility() == View.VISIBLE) {
+        if (tvDrawer != null && tvDrawer.getVisibility() == View.VISIBLE) {
             if (tvCategoryDrawerMode) {
                 tvCategoryDrawerMode = false;
                 populateTvDrawer();
             } else closeTvDrawer();
-        } else if (tvMode && !"Telewizja".equals(tab)) {
+        } else if (!"Telewizja".equals(tab)) {
             showTab("Telewizja");
         } else super.onBackPressed();
     }
@@ -1877,18 +1813,17 @@ public final class MainActivity extends Activity {
             favorite.setImageTintList(ColorStateList.valueOf(channel.favorite ? 0xFFFF728D : Ui.MUTED));
             favorite.setPadding(Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14),
                     Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14));
-            favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
+            favorite.setContentDescription(channel.favorite ? "Ulubiony · przytrzymaj pozycję, aby usunąć" : "Przytrzymaj pozycję, aby dodać do ulubionych");
             // A non-focusable heart is a separate touch target. Long press / red key
             // also toggle favorites without stealing the selected channel's OK event.
-            favorite.setOnClickListener(v -> toggleFavorite(channel));
+            favorite.setClickable(false);
             favorite.setFocusable(false);
             favorite.setFocusableInTouchMode(false);
             row.addView(favorite, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 38),
                     Ui.dp(MainActivity.this, 50)));
             row.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             row.setFocusable(false);
-            row.setOnClickListener(v -> activateCatalog(channel, "kliknięcie karty"));
-            row.addView(cardPlay(channel), Ui.margins(MainActivity.this, -2, 48, 4, 0, 0, 0));
+            row.setClickable(false);
             row.setContentDescription("Otwórz: " + channel.name);
             return row;
         }
@@ -1914,8 +1849,8 @@ public final class MainActivity extends Activity {
             heart.setPadding(Ui.dp(MainActivity.this, 7), Ui.dp(MainActivity.this, 7),
                     Ui.dp(MainActivity.this, 7), Ui.dp(MainActivity.this, 7));
             heart.setBackground(Ui.rounded(MainActivity.this, 0xD4142C42, 50));
-            heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-            heart.setOnClickListener(v -> toggleFavorite(channel));
+            heart.setContentDescription(channel.favorite ? "Ulubiony · przytrzymaj pozycję, aby usunąć" : "Przytrzymaj pozycję, aby dodać do ulubionych");
+            heart.setClickable(false);
             heart.setFocusable(false);
             heart.setFocusableInTouchMode(false);
             FrameLayout.LayoutParams heartParams = new FrameLayout.LayoutParams(
@@ -1944,8 +1879,7 @@ public final class MainActivity extends Activity {
                     "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
             tile.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             tile.setFocusable(false);
-            tile.setOnClickListener(v -> activateCatalog(channel, "kliknięcie kafelka"));
-            tile.addView(cardPlay(channel), Ui.margins(MainActivity.this, -1, 48, 0, 6, 0, 0));
+            tile.setClickable(false);
             tile.setContentDescription("Otwórz: " + channel.name);
             return tile;
         }

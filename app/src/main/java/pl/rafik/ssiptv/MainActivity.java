@@ -1211,7 +1211,7 @@ public final class MainActivity extends Activity {
         about.addView(Ui.text(this, "Diagnostyka aktywacji: " + PlaybackTrace.read(this), 13, Ui.WHITE, false));
         about.addView(Ui.button(this, "Kopiuj diagnostykę odtwarzania", false, v -> {
             android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SS-IPTV", 1.9.6 A4.2 | " + PlaybackTrace.read(this)));
+            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SS-IPTV", "1.9.6 A4.2 | " + PlaybackTrace.read(this)));
             toast("Skopiowano anonimową diagnostykę.");
         }), Ui.margins(this, -1, 48, 0, 6, 0, 0));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));

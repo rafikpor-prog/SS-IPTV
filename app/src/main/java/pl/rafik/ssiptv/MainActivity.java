@@ -103,6 +103,10 @@ public final class MainActivity extends Activity {
     private View tvDim;
     private TextView tvCount;
     private AdapterView<?> tvCollection;
+    private long activationCount;
+    private String activationStatus = "Jeszcze nie wybrano kanału";
+    private TextView activationLabel;
+    private Channel selectedForPlayback;
     private List<Channel> allChannels = new ArrayList<>();
     private Map<Long, Integer> liveOrdinals = new HashMap<>();
     private Map<Long, ChannelDatabase.Guide> guides = new HashMap<>();
@@ -281,6 +285,9 @@ public final class MainActivity extends Activity {
             query = "";
         }
         tab = name;
+        selectedForPlayback = null;
+        activationLabel = null;
+        sectionCaption = null;
         tvCollection = null;
         adapter = null;
         resultsFrame = null;
@@ -308,7 +315,8 @@ public final class MainActivity extends Activity {
             return insets;
         });
         main.requestApplyInsets();
-        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 72)));
+        main.addView(brandHeader(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
+        main.addView(primaryNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         content = Ui.column(this);
         main.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         switch (name) {
@@ -317,7 +325,7 @@ public final class MainActivity extends Activity {
             case "Ustawienia": showSettings(); break;
             default: showChannels(); break;
         }
-        main.addView(bottomNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 68)));
+        // Shared horizontal navigation; leave the remaining height for the catalog.
     }
 
     /** Układ 10-foot: cały ekran na treść, wysuwana na żądanie nawigacja z lewej. */
@@ -326,8 +334,9 @@ public final class MainActivity extends Activity {
         main.setBackgroundColor(Ui.BG);
         main.setPadding(Ui.dp(this, 18), Ui.dp(this, 14), Ui.dp(this, 18), Ui.dp(this, 14));
         setContentView(main);
+        main.addView(primaryNavigation(), new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
         tvRoot = new FrameLayout(this);
-        main.addView(tvRoot, new LinearLayout.LayoutParams(-1, -1));
+        main.addView(tvRoot, new LinearLayout.LayoutParams(-1, 0, 1));
         tvDrawer = null;
         tvDim = null;
         tvCategoryDrawerMode = false;
@@ -472,6 +481,7 @@ public final class MainActivity extends Activity {
             titleRow.addView(hint);
         }
         content.addView(titleRow, Ui.margins(this, -1, compactTv ? 44 : 62, 0, 0, 0, 5));
+        addActivationBar(content);
         resultsFrame = new FrameLayout(this);
         content.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();
@@ -673,6 +683,22 @@ public final class MainActivity extends Activity {
         return bar;
     }
 
+    private View primaryNavigation() {
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setFillViewport(true);
+        LinearLayout row = Ui.row(this);
+        row.setBackgroundColor(Ui.SURFACE);
+        String[] tabs = {"Telewizja", "VOD", "Seriale", "Ulubione", "Ostatnie", "EPG", "Ustawienia", "Źródła"};
+        for (String target : tabs) {
+            TextView control = Ui.button(this, "VOD".equals(target) ? "Filmy" : target, target.equals(tab), v -> showTab(target));
+            control.setSingleLine(true);
+            row.addView(control, new LinearLayout.LayoutParams(-2, -1));
+        }
+        scroll.addView(row, new FrameLayout.LayoutParams(-2, -1));
+        return scroll;
+    }
+
     private View bottomNavigation() {
         LinearLayout bottom = Ui.row(this);
         bottom.setPadding(Ui.dp(this, 9), Ui.dp(this, 4), Ui.dp(this, 9), Ui.dp(this, 5));
@@ -776,6 +802,7 @@ public final class MainActivity extends Activity {
         tiles.setOnClickListener(v -> setTiled(true));
         home.addView(heading, Ui.margins(this, -1, 42, 0, 0, 0, 4));
 
+        addActivationBar(home);
         resultsFrame = new FrameLayout(this);
         home.addView(resultsFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         renderCollection();
@@ -791,6 +818,43 @@ public final class MainActivity extends Activity {
         getPreferences(MODE_PRIVATE).edit()
                 .putBoolean(isMediaTab() ? "poster-grid" : tvMode ? "tv-grid" : "grid", enabled).apply();
         showTab(tab);
+    }
+
+    private void addActivationBar(LinearLayout parent) {
+        LinearLayout bar = Ui.row(this);
+        activationLabel = Ui.text(this, "Wybierz pozycję z listy", 12, Ui.SECONDARY, false);
+        activationLabel.setMaxLines(2);
+        bar.addView(activationLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView play = Ui.button(this, "Otwórz wybraną", true, v -> {
+            Channel chosen = selectedForPlayback;
+            if (chosen == null && tvCollection != null && adapter != null) {
+                int pos = tvCollection.getSelectedItemPosition();
+                if (pos >= 0 && pos < adapter.getCount()) chosen = (Channel) adapter.getItem(pos);
+            }
+            if (chosen == null) { toast("Najpierw wybierz pozycję strzałkami lub kliknij jej przycisk Odtwórz."); return; }
+            activateCatalog(chosen, "przycisk główny");
+        });
+        bar.addView(play, new LinearLayout.LayoutParams(-2, -1));
+        parent.addView(bar, Ui.margins(this, -1, 48, 0, 0, 0, 4));
+    }
+
+    private void activateCatalog(Channel channel, String event) {
+        if (channel == null || isFinishing() || isDestroyed()) return;
+        selectedForPlayback = channel;
+        activationCount++;
+        activationStatus = "Aktywacja #" + activationCount + " · " + event + " · " + (tvMode ? "TV" : "zwykły");
+        if (activationLabel != null) activationLabel.setText("Otwieranie pozycji…");
+        openContent(channel);
+    }
+
+    private TextView cardPlay(Channel channel) {
+        TextView play = Ui.button(this, channel.isSeries() || channel.isMovie() || channel.isEpisode() ? "Otwórz" : "Odtwórz", true,
+                v -> activateCatalog(channel, "przycisk karty"));
+        // Adapter owns keyboard selection; explicit button owns touch/mouse.
+        play.setFocusable(false);
+        play.setFocusableInTouchMode(false);
+        play.setContentDescription("Otwórz: " + channel.name);
+        return play;
     }
 
     private void renderCollection() {
@@ -837,7 +901,15 @@ public final class MainActivity extends Activity {
         });
         collection.setOnItemClickListener((parent, view, position, id) -> {
             Object selected = parent.getItemAtPosition(position);
-            if (selected instanceof Channel) openContent((Channel) selected);
+            if (selected instanceof Channel) activateCatalog((Channel) selected, "kliknięcie listy");
+        });
+        collection.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                Object value = parent.getItemAtPosition(position);
+                selectedForPlayback = value instanceof Channel ? (Channel) value : null;
+                if (activationLabel != null && selectedForPlayback != null) activationLabel.setText("Wybrano: " + selectedForPlayback.name);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { selectedForPlayback = null; }
         });
         resultsFrame.addView((View) collection, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout empty = Ui.column(this);
@@ -917,17 +989,21 @@ public final class MainActivity extends Activity {
         if ("Ostatnie".equals(tab)) {
             result.sort((left, right) -> Long.compare(right.lastWatched, left.lastWatched));
         }
+        selectedForPlayback = null;
         adapter.visible = result;
         adapter.notifyDataSetChanged();
+        if (activationLabel != null) activationLabel.setText("Wybierz pozycję z listy");
         if (sectionCaption != null) sectionCaption.setText(result.size() + " pozycji");
         if (tvCount != null) tvCount.setText(result.size() + " pozycji  •  " + selectedGroup);
-        if (tvMode && tvCollection != null && result.size() > 0) {
+        if (tvCollection != null && result.size() > 0) {
             if (tvCollection.getSelectedItemPosition() < 0 ||
                     tvCollection.getSelectedItemPosition() >= result.size()) {
                 tvCollection.setSelection(0);
             }
-            if (tvDrawer != null && tvDrawer.getVisibility() != View.VISIBLE &&
+            if (tvMode && tvDrawer != null && tvDrawer.getVisibility() != View.VISIBLE &&
                     !tvCollection.hasFocus()) tvCollection.post(this::focusTvCollection);
+            else if (!tvMode && !tvCollection.isInTouchMode() && !(getCurrentFocus() instanceof EditText) && !tvCollection.hasFocus())
+                tvCollection.post(() -> { if (!tvMode && tvCollection != null && tvCollection.isAttachedToWindow() && !(getCurrentFocus() instanceof EditText)) focusTvCollection(); });
         }
     }
 
@@ -1154,13 +1230,14 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.3 (A3)", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.4 (A4)", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
         about.addView(Ui.text(this, "Listy M3U są w prywatnej pamięci aplikacji. Hasło " +
                 "serwera jest szyfrowane przez Android Keystore.",
                 12, Ui.ACCENT, false));
+        about.addView(Ui.text(this, "Diagnostyka aktywacji (bieżąca sesja): " + activationStatus, 12, Ui.SECONDARY, false));
         page.addView(about, Ui.margins(this, -1, -2, 0, 0, 0, 16));
 
         LinearLayout screenCard = card();
@@ -1400,7 +1477,8 @@ public final class MainActivity extends Activity {
             }
             startActivity(intent);
         } else play(channel);
-        } catch (RuntimeException error) { lastOpenAt = -1000L; toast("Nie udało się otworzyć odtwarzacza. Sprawdź ustawienia silnika."); }
+        activationStatus += " · wysłano Intent";
+        } catch (RuntimeException error) { lastOpenAt = -1000L; activationStatus += " · błąd otwarcia: " + error.getClass().getSimpleName(); toast("Nie udało się otworzyć odtwarzacza. Sprawdź ustawienia silnika."); }
     }
 
     /** Gwarantowany OK na zaznaczonym wierszu/kafelku; nie oddajemy go serduszku. */
@@ -1414,7 +1492,7 @@ public final class MainActivity extends Activity {
                 int selected = tvCollection.getSelectedItemPosition();
                 selected = pl.rafik.ssiptv.data.CatalogActivation.position(selected, tvCollection.getFirstVisiblePosition(), adapter.getCount());
                 Object chosen = selected >= 0 ? tvCollection.getItemAtPosition(selected) : null;
-                if (chosen instanceof Channel) openContent((Channel) chosen);
+                if (chosen instanceof Channel) activateCatalog((Channel) chosen, "OK / Enter");
             }
             return true;
         }
@@ -1768,7 +1846,8 @@ public final class MainActivity extends Activity {
                     Ui.dp(MainActivity.this, 50)));
             row.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             row.setFocusable(false);
-            row.setClickable(false);
+            row.setOnClickListener(v -> activateCatalog(channel, "kliknięcie karty"));
+            row.addView(cardPlay(channel), Ui.margins(MainActivity.this, -2, 48, 4, 0, 0, 0));
             row.setContentDescription("Otwórz: " + channel.name);
             return row;
         }
@@ -1824,7 +1903,8 @@ public final class MainActivity extends Activity {
                     "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
             tile.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             tile.setFocusable(false);
-            tile.setClickable(false);
+            tile.setOnClickListener(v -> activateCatalog(channel, "kliknięcie kafelka"));
+            tile.addView(cardPlay(channel), Ui.margins(MainActivity.this, -1, 48, 0, 6, 0, 0));
             tile.setContentDescription("Otwórz: " + channel.name);
             return tile;
         }

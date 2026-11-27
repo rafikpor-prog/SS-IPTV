@@ -1,0 +1,2 @@
+# Android A2 – 1.9.2
+Branch only; package, signing config and schema 5 unchanged. Explicit click handlers for cards, selected-item guard, deferred startup, bounded fallback for engine initialization, clear failure/retry instead of switching channel, null-safe save, history on first frame, local multi-token Polish search and 24h EPG search. DASH module. CI now runs assembleDebug, unit tests and lint. No physical device confirmation; no evidence yet of exact reported cause. Watchlist and full migration/production signing remain open. No credentials in diagnostics.

@@ -91,6 +91,7 @@ public final class MainActivity extends Activity {
     private String tab = "Telewizja";
     private String selectedGroup = ALL;
     private String query = "";
+    private long lastOpenAt = -1000L;
     private String previousTab = "Telewizja";
     private boolean tiled;
     private boolean mediaGrid = true;
@@ -824,8 +825,10 @@ public final class MainActivity extends Activity {
             items.setFocusableInTouchMode(true);
             tvCollection = collection;
         }
-        collection.setOnItemClickListener((parent, view, position, id) ->
-                openContent(adapter.visible.get(position)));
+        collection.setOnItemClickListener((parent, view, position, id) -> {
+            Object selected = parent.getItemAtPosition(position);
+            if (selected instanceof Channel) openContent((Channel) selected);
+        });
         resultsFrame.addView((View) collection, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout empty = Ui.column(this);
         empty.setGravity(Gravity.CENTER);
@@ -896,8 +899,8 @@ public final class MainActivity extends Activity {
                     !c.group.equals(selectedGroup)) continue;
             ChannelDatabase.Guide guide = guides.get(c.id);
             String prog = guide == null || guide.current == null ? "" : guide.current;
-            if (!query.isEmpty() && !c.name.toLowerCase(Locale.ROOT).contains(query) &&
-                    !prog.toLowerCase(Locale.ROOT).contains(query)) continue;
+            if (!pl.rafik.ssiptv.data.LibrarySearch.matches(query, c.name, c.group, prog,
+                    guide == null ? "" : guide.next, c.description)) continue;
             result.add(c);
         }
         if ("Ostatnie".equals(tab)) {
@@ -1070,6 +1073,46 @@ public final class MainActivity extends Activity {
             page.addView(row, Ui.margins(this, -1, -2, 0, 8, 0, 0));
         }
 
+        // Search local programme table asynchronously; never request another playlist.
+        EditText epgSearch = input("Szukaj audycji (24 h)", false);
+        epgSearch.setSingleLine(true);
+        epgSearch.setMaxLines(1);
+        page.addView(epgSearch, Ui.margins(this, -1, 48, 0, 12, 0, 6));
+        LinearLayout searchResults = Ui.column(this);
+        TextView searchStatus = Ui.text(this, "", 12, Ui.ACCENT, false);
+        page.addView(Ui.button(this, "Szukaj audycji", true, v -> {
+            String phrase = epgSearch.getText().toString().trim();
+            if (phrase.isEmpty() || phrase.length() > 160) { searchStatus.setText("Wpisz od 1 do 160 znaków."); return; }
+            Object token = new Object();
+            searchResults.setTag(token);
+            searchResults.removeAllViews();
+            searchStatus.setText("Przeszukiwanie lokalnego EPG…");
+            String source = secure.activeSource();
+            io.execute(() -> {
+                try {
+                    java.util.List<ChannelDatabase.ProgrammeHit> hits = database.searchProgrammes(phrase, source);
+                    runOnUiThread(() -> {
+                        if (isFinishing() || !searchResults.isAttachedToWindow() || searchResults.getTag() != token) return;
+                        searchStatus.setText("Wyniki: " + hits.size() + (hits.size() == 256 ? " (limit)" : ""));
+                        for (ChannelDatabase.ProgrammeHit hit : hits) {
+                            String when = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(new java.util.Date(hit.start));
+                            TextView result = Ui.button(this, when + " · " + hit.channelName + "\n" + hit.title + "\nOtwórz kanał", false, view -> {
+                                for (Channel item : allChannels) if (item.id == hit.channelId) { openContent(item); return; }
+                                toast("Kanał nie jest dostępny w aktualnej bibliotece.");
+                            });
+                            searchResults.addView(result, Ui.margins(this, -1, -2, 0, 0, 0, 6));
+                        }
+                    });
+                } catch (RuntimeException error) {
+                    runOnUiThread(() -> { if (!isFinishing() && searchResults.isAttachedToWindow() && searchResults.getTag() == token) searchStatus.setText("Nie udało się odczytać EPG."); });
+                }
+            });
+        }));
+        page.addView(Ui.button(this, "Wyczyść wyniki", false, v -> {
+            searchResults.setTag(new Object()); searchResults.removeAllViews(); epgSearch.setText(""); searchStatus.setText("");
+        }));
+        page.addView(searchStatus);
+        page.addView(searchResults);
         page.addView(Ui.text(this, "NA ANTENIE", 11, Ui.MUTED, true),
                 Ui.margins(this, -1, -2, 0, 24, 0, 7));
         int count = 0;
@@ -1100,7 +1143,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.1", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.2 (A2)", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1129,7 +1172,7 @@ public final class MainActivity extends Activity {
         playerCard.addView(Ui.text(this, "Domyślny odtwarzacz", 19, Ui.WHITE, true));
         playerCard.addView(Ui.text(this,
                 "Jedna wybrana technologia obsługuje TV i VOD. Przy utracie połączenia " +
-                "aplikacja ponawia próbę tylko w tym silniku — bez automatycznego przełączania.",
+                "aplikacja ponawia próbę w tym silniku; przy lokalnym błędzie inicjalizacji dopuszcza jedną próbę kompatybilnego dekodera.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 12));
         for (String engine : new String[]{"android", "media3", "vlc"}) {
             String label = "android".equals(engine) ? "Android / systemowy" :
@@ -1326,6 +1369,11 @@ public final class MainActivity extends Activity {
     }
 
     private void openContent(Channel channel) {
+        if (channel == null || channel.id <= 0) { toast("Nie można otworzyć pozycji. Odśwież bibliotekę."); return; }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastOpenAt < 400L) return;
+        lastOpenAt = now;
+        try {
         if (channel.isSeries() || channel.isEpisode() || channel.isMovie()) {
             Intent intent = new Intent(this, VodDetailActivity.class);
             intent.putExtra(VodDetailActivity.EXTRA_ID, channel.id);
@@ -1335,6 +1383,7 @@ public final class MainActivity extends Activity {
             }
             startActivity(intent);
         } else play(channel);
+        } catch (RuntimeException error) { lastOpenAt = -1000L; toast("Nie udało się otworzyć odtwarzacza. Sprawdź ustawienia silnika."); }
     }
 
     /** Gwarantowany OK na zaznaczonym wierszu/kafelku; nie oddajemy go serduszku. */
@@ -1346,8 +1395,9 @@ public final class MainActivity extends Activity {
             if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 &&
                     adapter != null) {
                 int selected = tvCollection.getSelectedItemPosition();
-                if (selected >= 0 && selected < adapter.visible.size())
-                    openContent(adapter.visible.get(selected));
+                if (selected < 0 && adapter.getCount() > 0) selected = tvCollection.getFirstVisiblePosition();
+                Object chosen = selected >= 0 && selected < adapter.getCount() ? adapter.getItem(selected) : null;
+                if (chosen instanceof Channel) openContent((Channel) chosen);
             }
             return true;
         }
@@ -1690,10 +1740,12 @@ public final class MainActivity extends Activity {
             favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             if (!tvMode) {
                 favorite.setOnClickListener(v -> toggleFavorite(channel));
-                Ui.tvFocus(favorite);
+                favorite.setFocusable(false);
             }
             row.addView(favorite, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 38),
                     Ui.dp(MainActivity.this, 50)));
+            row.setOnClickListener(v -> openContent(channel));
+            row.setFocusable(false);
             return row;
         }
 
@@ -1721,7 +1773,7 @@ public final class MainActivity extends Activity {
             heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
             if (!tvMode) {
                 heart.setOnClickListener(v -> toggleFavorite(channel));
-                Ui.tvFocus(heart);
+                heart.setFocusable(false);
             }
             FrameLayout.LayoutParams heartParams = new FrameLayout.LayoutParams(
                     Ui.dp(MainActivity.this, 35), Ui.dp(MainActivity.this, 35), Gravity.RIGHT | Gravity.TOP);
@@ -1747,6 +1799,8 @@ public final class MainActivity extends Activity {
             tile.addView(desc);
             if (!isPoster) tile.addView(Ui.text(MainActivity.this,
                     "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
+            tile.setOnClickListener(v -> openContent(channel));
+            tile.setFocusable(false);
             return tile;
         }
     }

@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="SS-IPTV TEST 1.9.6" tools:replace="android:label">
+        <activity android:name=".MainActivity" android:label="SS-IPTV TEST 1.9.6" tools:replace="android:label"/>
+    </application>
+</manifest>

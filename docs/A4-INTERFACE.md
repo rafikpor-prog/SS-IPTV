@@ -1,0 +1,2 @@
+# A4 1.9.4 (15)
+Base A3 a12c583. Explicit play button per list row and grid card, direct card click, shared selection action and OK; all routes call activateCatalog then openContent. Normal-mode initial keyboard focus when not in touch mode and no text input focused. Session diagnostic (event count, layout and Intent dispatch, no URL or credentials). Horizontal top menu shared by TV and regular UI; phone horizontal scroll. No package or schema change. CI does not establish device input acceptance. Existing persistent signing secret still needs owner configuration.

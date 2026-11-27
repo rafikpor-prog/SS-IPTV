@@ -190,9 +190,9 @@ public final class PlayerActivity extends Activity {
     private final Runnable loadingTick = new Runnable() {
         @Override public void run() {
             if (isFinishing() || isDestroyed()) return;
-            if (!leftScreen && channel != null) {
+            if (!leftScreen && initialPlaybackStarted && channel != null && !unavailablePending) {
                 long now = SystemClock.elapsedRealtime();
-                if (!firstFrameReady && !retryScheduled) {
+                if (!firstFrameReady && !retryScheduled && !userPaused) {
                     long waitSeconds = Math.max(0, now - engineStartedAt) / 1000;
                     if (loadingMessage != null && loadingOverlay.getVisibility() == View.VISIBLE)
                         loadingMessage.setText(engineName() +
@@ -896,6 +896,7 @@ public final class PlayerActivity extends Activity {
 
     /** Co 30 s diagnozujemy postęp, a po 60 s bez postępu odtwarzamy ponownie. */
     private void inspectPlayback() {
+        if (leftScreen || !initialPlaybackStarted || channel == null || unavailablePending || retryScheduled) return;
         NetworkIndicator network = NetworkIndicator.read(this);
         if (!network.connected) {
             setPlaybackStatus("Brak sieci · oczekiwanie na połączenie");
@@ -973,7 +974,7 @@ public final class PlayerActivity extends Activity {
                 unavailablePending) return;
         Log.w("SS-IPTV-Player", reason + " | engine=" + engineName());
         boolean networkAvailable = NetworkIndicator.read(this).connected;
-        if (UnavailableChannelPolicy.shouldAdvance(channel.vod, networkAvailable,
+        if (startupRetries >= 3 || UnavailableChannelPolicy.shouldAdvance(channel.vod, networkAvailable,
                 firstFrameReady, startupRetries)) {
             showSourceUnavailable();
             return;
@@ -1024,6 +1025,7 @@ public final class PlayerActivity extends Activity {
 
     private void showPlaybackFailure(String message) {
         if (leftScreen || isFinishing()) return;
+        ++playGeneration; // Ignore stale events and pending retries after terminal failure.
         unavailablePending = true;
         retryScheduled = false;
         showLoading(message);
@@ -1774,6 +1776,7 @@ public final class PlayerActivity extends Activity {
         // Kilka szybkich naciśnięć pilota oznacza jeden ostatni wybór.
         pendingZap = () -> {
             pendingZap = null;
+            if (leftScreen || isFinishing() || isDestroyed()) { retryScheduled = true; return; }
             startPlayback();
         };
         handler.postDelayed(pendingZap, 260);
@@ -1932,7 +1935,7 @@ public final class PlayerActivity extends Activity {
     }
 
     private void saveProgress() {
-        if (channel == null || !channel.vod || channel.id <= 0) return;
+        if (channel == null || !channel.vod || channel.id <= 0 || !firstFrameReady) return;
         if (usingPlatform ? platformPlayer == null || platformView == null : usingVlc ? vlcPlayer == null : player == null) return;
         long pos = Math.max(0, usingPlatform && platformView != null ?
                 platformView.getCurrentPosition() : usingVlc && vlcPlayer != null ?
@@ -1940,7 +1943,8 @@ public final class PlayerActivity extends Activity {
         long dur = Math.max(0, usingPlatform && platformView != null ?
                 platformView.getDuration() : usingVlc && vlcPlayer != null ?
                 vlcPlayer.getLength() : player.getDuration());
-        if (dur > 0 && pos > dur - 15000) pos = 0;
+        if (dur <= 0 || dur == C.TIME_UNSET) return;
+        if (pos > dur - 15000) pos = 0;
         final long lastPosition = pos;
         final long savedId = channel.id;
         storage.execute(() -> database.savePlayback(savedId, lastPosition, dur));
@@ -1963,6 +1967,9 @@ public final class PlayerActivity extends Activity {
             return;
         }
         if (userPaused || unavailablePending) return;
+        lastPlaybackEventAt = SystemClock.elapsedRealtime();
+        lastSamplePosition = -1;
+        lastSampleTraffic = -1;
         if (player != null) player.play();
         if (usingPlatform && platformView != null) platformView.start();
         if (vlcPlayer != null && !vlcPlayer.isPlaying()) vlcPlayer.play();
@@ -1970,7 +1977,10 @@ public final class PlayerActivity extends Activity {
 
     @Override protected void onStop() {
         leftScreen = true;
-        if (retryScheduled) ++playGeneration;
+        if (retryScheduled || (initialPlaybackStarted && !firstFrameReady && !unavailablePending)) {
+            ++playGeneration;
+            retryScheduled = true;
+        }
         saveProgress();
         if (player != null) player.pause();
         if (usingPlatform && platformView != null && platformView.isPlaying()) platformView.pause();

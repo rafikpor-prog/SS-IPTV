@@ -281,6 +281,11 @@ public final class MainActivity extends Activity {
             query = "";
         }
         tab = name;
+        tvCollection = null;
+        adapter = null;
+        resultsFrame = null;
+        chips = null;
+        tvCount = null;
         if (tvMode) {
             showTvScreen(name);
             return;
@@ -815,16 +820,21 @@ public final class MainActivity extends Activity {
             list.setAdapter(adapter);
             collection = list;
         }
-        if (tvMode) {
-            AbsListView items = (AbsListView) collection;
-            items.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-            if (items instanceof ListView) ((ListView) items).setItemsCanFocus(false);
-            items.setSelector(Ui.tvSelection(this));
-            items.setDrawSelectorOnTop(true);
-            items.setFocusable(true);
-            items.setFocusableInTouchMode(true);
-            tvCollection = collection;
-        }
+        // The layout preference must never change input semantics.
+        AbsListView items = (AbsListView) collection;
+        items.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        if (items instanceof ListView) ((ListView) items).setItemsCanFocus(false);
+        items.setSelector(Ui.tvSelection(this));
+        items.setDrawSelectorOnTop(true);
+        items.setFocusable(true);
+        items.setFocusableInTouchMode(true);
+        tvCollection = collection;
+        collection.setOnItemLongClickListener((parent, child, position, id) -> {
+            Object selected = parent.getItemAtPosition(position);
+            if (!(selected instanceof Channel)) return false;
+            toggleFavorite((Channel) selected);
+            return true;
+        });
         collection.setOnItemClickListener((parent, view, position, id) -> {
             Object selected = parent.getItemAtPosition(position);
             if (selected instanceof Channel) openContent((Channel) selected);
@@ -840,6 +850,7 @@ public final class MainActivity extends Activity {
         empty.addView(guidance, Ui.margins(this, -1, -2, 0, 9, 0, 14));
         empty.addView(Ui.button(this, "Dodaj źródło M3U / IPTV", true,
                 v -> showTab("Źródła")));
+        empty.setVisibility(View.GONE);
         resultsFrame.addView(empty, new FrameLayout.LayoutParams(-1, -1));
         collection.setEmptyView(empty);
         filterChannels();
@@ -1143,7 +1154,7 @@ public final class MainActivity extends Activity {
         page.addView(Ui.text(this, "Prosto. Prywatnie. Pod Twoją kontrolą.", 13,
                 Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 5, 0, 20));
         LinearLayout about = card();
-        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.2 (A2)", 19, Ui.WHITE, true));
+        about.addView(Ui.text(this, "SS-IPTV  •  wersja 1.9.3 (A3)", 19, Ui.WHITE, true));
         about.addView(Ui.text(this, "Niezależny odtwarzacz Twoich własnych źródeł IPTV. " +
                 "Aplikacja nie dostarcza kanałów ani subskrypcji.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 10));
@@ -1155,7 +1166,7 @@ public final class MainActivity extends Activity {
         LinearLayout screenCard = card();
         screenCard.addView(Ui.text(this, "Interfejs ekranu", 18, Ui.WHITE, true));
         screenCard.addView(Ui.text(this,
-                "Tryb TV: pełnoekranowa lista, boczne menu kategorii i nawigacja pilotem. " +
+                "Tryb TV zmienia tylko układ. Odtwarzanie, kliknięcia i przycisk OK działają również w zwykłym widoku. " +
                 "Możesz włączyć go również na Android Box bez certyfikacji Android TV.",
                 13, Ui.SECONDARY, false), Ui.margins(this, -1, -2, 0, 8, 0, 12));
         screenCard.addView(Ui.button(this, tvMode ? "Tryb TV: wyłącz" :
@@ -1388,15 +1399,15 @@ public final class MainActivity extends Activity {
 
     /** Gwarantowany OK na zaznaczonym wierszu/kafelku; nie oddajemy go serduszku. */
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (tvMode && tvCollection != null && tvCollection.hasFocus() &&
+        if (tvCollection != null && tvCollection.isAttachedToWindow() && tvCollection.hasFocus() &&
                 (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_CENTER ||
                         event.getKeyCode() == KeyEvent.KEYCODE_ENTER ||
                         event.getKeyCode() == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
             if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 &&
                     adapter != null) {
                 int selected = tvCollection.getSelectedItemPosition();
-                if (selected < 0 && adapter.getCount() > 0) selected = tvCollection.getFirstVisiblePosition();
-                Object chosen = selected >= 0 && selected < adapter.getCount() ? adapter.getItem(selected) : null;
+                selected = pl.rafik.ssiptv.data.CatalogActivation.position(selected, tvCollection.getFirstVisiblePosition(), adapter.getCount());
+                Object chosen = selected >= 0 ? tvCollection.getItemAtPosition(selected) : null;
                 if (chosen instanceof Channel) openContent((Channel) chosen);
             }
             return true;
@@ -1408,6 +1419,10 @@ public final class MainActivity extends Activity {
         if (keyCode == KeyEvent.KEYCODE_ESCAPE && event.getRepeatCount() == 0) {
             exitApp();
             return true;
+        }
+        if (event.getRepeatCount() == 0 && keyCode == KeyEvent.KEYCODE_PROG_RED && tvCollection != null && tvCollection.isAttachedToWindow() && tvCollection.hasFocus() && adapter != null) {
+            int index = pl.rafik.ssiptv.data.CatalogActivation.position(tvCollection.getSelectedItemPosition(), tvCollection.getFirstVisiblePosition(), adapter.getCount());
+            if (index >= 0) { toggleFavorite(adapter.visible.get(index)); return true; }
         }
         if (tvMode && event.getRepeatCount() == 0) {
             if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO) {
@@ -1738,14 +1753,17 @@ public final class MainActivity extends Activity {
             favorite.setPadding(Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14),
                     Ui.dp(MainActivity.this, 8), Ui.dp(MainActivity.this, 14));
             favorite.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-            if (!tvMode) {
-                favorite.setOnClickListener(v -> toggleFavorite(channel));
-                favorite.setFocusable(false);
-            }
+            // A non-focusable heart is a separate touch target. Long press / red key
+            // also toggle favorites without stealing the selected channel's OK event.
+            favorite.setOnClickListener(v -> toggleFavorite(channel));
+            favorite.setFocusable(false);
+            favorite.setFocusableInTouchMode(false);
             row.addView(favorite, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 38),
                     Ui.dp(MainActivity.this, 50)));
-            row.setOnClickListener(v -> openContent(channel));
+            row.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             row.setFocusable(false);
+            row.setClickable(false);
+            row.setContentDescription("Otwórz: " + channel.name);
             return row;
         }
 
@@ -1771,10 +1789,9 @@ public final class MainActivity extends Activity {
                     Ui.dp(MainActivity.this, 7), Ui.dp(MainActivity.this, 7));
             heart.setBackground(Ui.rounded(MainActivity.this, 0xD4142C42, 50));
             heart.setContentDescription(channel.favorite ? "Usuń z ulubionych" : "Dodaj do ulubionych");
-            if (!tvMode) {
-                heart.setOnClickListener(v -> toggleFavorite(channel));
-                heart.setFocusable(false);
-            }
+            heart.setOnClickListener(v -> toggleFavorite(channel));
+            heart.setFocusable(false);
+            heart.setFocusableInTouchMode(false);
             FrameLayout.LayoutParams heartParams = new FrameLayout.LayoutParams(
                     Ui.dp(MainActivity.this, 35), Ui.dp(MainActivity.this, 35), Gravity.RIGHT | Gravity.TOP);
             art.addView(heart, heartParams);
@@ -1799,8 +1816,10 @@ public final class MainActivity extends Activity {
             tile.addView(desc);
             if (!isPoster) tile.addView(Ui.text(MainActivity.this,
                     "Nr " + (liveIndex(channel) + 1), 10, Ui.MUTED, false));
-            tile.setOnClickListener(v -> openContent(channel));
+            tile.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
             tile.setFocusable(false);
+            tile.setClickable(false);
+            tile.setContentDescription("Otwórz: " + channel.name);
             return tile;
         }
     }
